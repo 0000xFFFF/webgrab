@@ -83,7 +83,11 @@ pub struct Keywords {
 impl Keywords {
     pub fn new(any: &[String], must: &[String], ignore: &[String]) -> Self {
         let lc = |v: &[String]| v.iter().map(|s| s.to_lowercase()).collect::<Vec<_>>();
-        Self { any: lc(any), must: lc(must), ignore: lc(ignore) }
+        Self {
+            any: lc(any),
+            must: lc(must),
+            ignore: lc(ignore),
+        }
     }
 
     fn any_ok(&self, l: &str) -> bool {

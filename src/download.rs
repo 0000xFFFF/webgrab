@@ -1,18 +1,18 @@
 use crate::cli::Cli;
 use crate::db::{Db, PageRec};
-use crate::filter::{media_kind, Filters, Hint, Keywords};
+use crate::filter::{Filters, Hint, Keywords, media_kind};
 use crate::skip::Skipper;
 use crate::stats::Stats;
 use crate::ua;
-use crate::ui::{Printer, K};
+use crate::ui::{K, Printer};
 use crate::util::{file_name_from_url, human, split_name, walk_files};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Mutex;
+use std::sync::atomic::Ordering::Relaxed;
 use std::time::Duration;
 
 pub enum Outcome {
@@ -102,7 +102,8 @@ impl<'a> Ctx<'a> {
         let downloading = !cli.list && !cli.test;
 
         if downloading {
-            fs::create_dir_all(&dir).map_err(|e| format!("can't create {}: {}", dir.display(), e))?;
+            fs::create_dir_all(&dir)
+                .map_err(|e| format!("can't create {}: {}", dir.display(), e))?;
         }
 
         let agent = ureq::AgentBuilder::new()
@@ -181,7 +182,11 @@ impl<'a> Ctx<'a> {
         let (mut hashed, mut known) = (0usize, 0usize);
 
         for p in walk_files(&self.dir, self.cli.recursive) {
-            let rel = p.strip_prefix(&self.dir).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+            let rel = p
+                .strip_prefix(&self.dir)
+                .unwrap_or(&p)
+                .to_string_lossy()
+                .replace('\\', "/");
             if rel.ends_with(".webgrab_download") {
                 continue;
             }
@@ -195,7 +200,11 @@ impl<'a> Ctx<'a> {
                 }
             }
             let Ok(h) = hex_of_file(&p) else { continue };
-            self.hashes.lock().unwrap_or_else(|e| e.into_inner()).entry(h.clone()).or_insert_with(|| rel.clone());
+            self.hashes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entry(h.clone())
+                .or_insert_with(|| rel.clone());
             if let Some(d) = &self.db {
                 let size = fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
                 if let Err(e) = d.media_existing(&rel, media_kind(&rel, None), size, &h) {
@@ -206,7 +215,12 @@ impl<'a> Ctx<'a> {
         }
         self.ui.say(
             K::Inf,
-            &format!("hash-existing: hashed {} file(s), {} already in the db ({})", hashed, known, self.dir.display()),
+            &format!(
+                "hash-existing: hashed {} file(s), {} already in the db ({})",
+                hashed,
+                known,
+                self.dir.display()
+            ),
         );
     }
 
@@ -276,8 +290,10 @@ impl<'a> Ctx<'a> {
 
     pub fn db_link_media(&self, page: &str, media: &[(String, Option<Hint>)]) {
         if let Some(d) = &self.db {
-            let items: Vec<(String, &'static str)> =
-                media.iter().map(|(u, h)| (u.clone(), media_kind(u, *h))).collect();
+            let items: Vec<(String, &'static str)> = media
+                .iter()
+                .map(|(u, h)| (u.clone(), media_kind(u, *h)))
+                .collect();
             self.db_err(d.link_media(page, &items));
         }
     }
@@ -311,10 +327,19 @@ impl<'a> Ctx<'a> {
     }
 
     fn release(&self, name: &str) {
-        self.reserved.lock().unwrap_or_else(|e| e.into_inner()).remove(name);
+        self.reserved
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(name);
     }
 
-    fn fail(&self, url: &str, name: Option<&str>, status: Option<u16>, msg: &str) -> Result<Outcome, String> {
+    fn fail(
+        &self,
+        url: &str,
+        name: Option<&str>,
+        status: Option<u16>,
+        msg: &str,
+    ) -> Result<Outcome, String> {
         if let Some(n) = name {
             self.release(n);
         }
@@ -327,7 +352,12 @@ impl<'a> Ctx<'a> {
     }
 
     /// Stream the body to `tmp`, hashing on the fly when needed.
-    fn stream(&self, mut reader: impl Read, tmp: &Path, want_hash: bool) -> io::Result<(u64, Option<String>)> {
+    fn stream(
+        &self,
+        mut reader: impl Read,
+        tmp: &Path,
+        want_hash: bool,
+    ) -> io::Result<(u64, Option<String>)> {
         let mut file = File::create(tmp)?;
         let mut hasher = want_hash.then(Sha256::new);
         let mut buf = vec![0u8; 64 * 1024];
@@ -356,7 +386,10 @@ impl<'a> Ctx<'a> {
         let total = self.stats.queued.load(Relaxed).max(n);
         let w = total.to_string().len();
         if cli.verbose {
-            self.ui.say(K::Cur, &format!("DING[{:>w$}/{}]: {} ({})", n, total, url, name));
+            self.ui.say(
+                K::Cur,
+                &format!("DING[{:>w$}/{}]: {} ({})", n, total, url, name),
+            );
         }
 
         // resume: the db already has this file (saved, or deleted as a duplicate)
@@ -377,7 +410,9 @@ impl<'a> Ctx<'a> {
 
         let resp = match self.get(url).call() {
             Ok(r) => r,
-            Err(ureq::Error::Status(code, _)) => return self.fail(url, None, Some(code), &format!("HTTP {}", code)),
+            Err(ureq::Error::Status(code, _)) => {
+                return self.fail(url, None, Some(code), &format!("HTTP {}", code));
+            }
             Err(e) => return self.fail(url, None, None, &e.to_string()),
         };
         let http = resp.status();
@@ -426,7 +461,10 @@ impl<'a> Ctx<'a> {
                     if let Some(d) = &self.db {
                         self.db_err(d.media_duplicate(url, kind, mime.as_deref(), size, h, http));
                     }
-                    self.note(K::War, &format!("WAR[DUPLICATE] {} (same content as {}) deleted", url, orig));
+                    self.note(
+                        K::War,
+                        &format!("WAR[DUPLICATE] {} (same content as {}) deleted", url, orig),
+                    );
                     return Ok(Outcome::HashDupe);
                 }
             }
@@ -435,7 +473,10 @@ impl<'a> Ctx<'a> {
         if let Err(e) = fs::rename(&tmp, &final_path) {
             let _ = fs::remove_file(&tmp);
             if let (true, Some(h)) = (cli.nodupes, &hash) {
-                self.hashes.lock().unwrap_or_else(|e| e.into_inner()).remove(h);
+                self.hashes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(h);
             }
             return self.fail(url, Some(&final_name), None, &format!("IO {}", e));
         }
@@ -457,7 +498,15 @@ impl<'a> Ctx<'a> {
 
         // live database: written after every file
         if let Some(d) = &self.db {
-            self.db_err(d.media_downloaded(url, kind, &final_name, mime.as_deref(), size, hash.as_deref(), http));
+            self.db_err(d.media_downloaded(
+                url,
+                kind,
+                &final_name,
+                mime.as_deref(),
+                size,
+                hash.as_deref(),
+                http,
+            ));
         }
 
         let tag = match clash {
@@ -469,7 +518,16 @@ impl<'a> Ctx<'a> {
         let w = total.to_string().len();
         self.ui.say(
             K::Pri,
-            &format!("DLED[{:>w$}/{}]: {} ({}) ({} ({} bytes)){}", d, total, url, final_name, human(size as f64), size, tag),
+            &format!(
+                "DLED[{:>w$}/{}]: {} ({}) ({} ({} bytes)){}",
+                d,
+                total,
+                url,
+                final_name,
+                human(size as f64),
+                size,
+                tag
+            ),
         );
         Ok(Outcome::Downloaded)
     }

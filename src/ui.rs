@@ -63,7 +63,11 @@ impl Printer {
     /// Message that ignores --compact.
     pub fn always(&self, k: K, text: &str) {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        let color = if matches!(k, K::Err | K::Cer) { self.color_err } else { self.color_out };
+        let color = if matches!(k, K::Err | K::Cer) {
+            self.color_err
+        } else {
+            self.color_out
+        };
         let line = if color {
             format!("{}{}\x1b[0m", Self::code(k), text)
         } else {

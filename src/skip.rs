@@ -13,7 +13,10 @@ pub struct Skipper {
 
 impl Skipper {
     pub fn new(cli: &Cli, dir: &Path) -> Self {
-        let s = Skipper { active: cli.skip, names: Mutex::new(HashSet::new()) };
+        let s = Skipper {
+            active: cli.skip,
+            names: Mutex::new(HashSet::new()),
+        };
         if cli.skip {
             for p in walk_files(dir, cli.recursive) {
                 if let Some(n) = p.file_name() {
@@ -29,10 +32,16 @@ impl Skipper {
     }
 
     pub fn add(&self, name: &str) {
-        self.names.lock().unwrap_or_else(|e| e.into_inner()).insert(name.to_string());
+        self.names
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(name.to_string());
     }
 
     pub fn contains(&self, name: &str) -> bool {
-        self.names.lock().unwrap_or_else(|e| e.into_inner()).contains(name)
+        self.names
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(name)
     }
 }

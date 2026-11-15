@@ -18,25 +18,33 @@ fn re_css() -> &'static Regex {
 fn re_href() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r#"(?i)<(?:a|area)\b[^>]*?\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))"#).unwrap()
+        Regex::new(r#"(?i)<(?:a|area)\b[^>]*?\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))"#)
+            .unwrap()
     })
 }
 fn re_frame() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r#"(?i)<(?:iframe|frame)\b[^>]*?\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))"#).unwrap()
+        Regex::new(
+            r#"(?i)<(?:iframe|frame)\b[^>]*?\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))"#,
+        )
+        .unwrap()
     })
 }
 fn re_tag() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r#"(?is)</(video|audio|picture)\s*>|<(img|video|audio|source|picture)\b([^>]*)>"#).unwrap()
+        Regex::new(
+            r#"(?is)</(video|audio|picture)\s*>|<(img|video|audio|source|picture)\b([^>]*)>"#,
+        )
+        .unwrap()
     })
 }
 fn re_attr() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r#"([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))"#).unwrap()
+        Regex::new(r#"([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))"#)
+            .unwrap()
     })
 }
 fn re_comma_ws() -> &'static Regex {
@@ -48,10 +56,16 @@ fn re_comma_ws() -> &'static Regex {
 pub fn title(html: &str) -> String {
     // ASCII lowercasing keeps byte offsets identical to the original string.
     let lower = html.to_ascii_lowercase();
-    let Some(start) = lower.find("<title") else { return String::new() };
-    let Some(gt) = lower[start..].find('>') else { return String::new() };
+    let Some(start) = lower.find("<title") else {
+        return String::new();
+    };
+    let Some(gt) = lower[start..].find('>') else {
+        return String::new();
+    };
     let open_end = start + gt + 1;
-    let Some(end) = lower[open_end..].find("</title>") else { return String::new() };
+    let Some(end) = lower[open_end..].find("</title>") else {
+        return String::new();
+    };
     let raw = html_escape::decode_html_entities(&html[open_end..open_end + end]).to_string();
     raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -78,9 +92,16 @@ fn element_hits(html: &str) -> Vec<(usize, String, Hint)> {
         let mut attrs: Vec<(String, usize, String)> = Vec::new();
         for a in re_attr().captures_iter(attrs_m.as_str()) {
             let v = a.get(2).or_else(|| a.get(3)).or_else(|| a.get(4)).unwrap();
-            attrs.push((a[1].to_ascii_lowercase(), attrs_m.start() + v.start(), v.as_str().to_string()));
+            attrs.push((
+                a[1].to_ascii_lowercase(),
+                attrs_m.start() + v.start(),
+                v.as_str().to_string(),
+            ));
         }
-        let mime = attrs.iter().find(|(n, _, _)| n == "type").map(|(_, _, v)| v.to_lowercase());
+        let mime = attrs
+            .iter()
+            .find(|(n, _, _)| n == "type")
+            .map(|(_, _, v)| v.to_lowercase());
 
         let mut push = |names: &[&str], kind: Hint| {
             for (n, pos, v) in &attrs {
@@ -89,7 +110,14 @@ fn element_hits(html: &str) -> Vec<(usize, String, Hint)> {
                 }
             }
         };
-        const LAZY: [&str; 6] = ["src", "srcset", "data-src", "data-srcset", "data-original", "data-lazy-src"];
+        const LAZY: [&str; 6] = [
+            "src",
+            "srcset",
+            "data-src",
+            "data-srcset",
+            "data-original",
+            "data-lazy-src",
+        ];
         match tag.as_str() {
             "img" => push(&LAZY, Hint::Image),
             "video" => {
@@ -105,7 +133,9 @@ fn element_hits(html: &str) -> Vec<(usize, String, Hint)> {
             "source" => {
                 let kind = match mime.as_deref() {
                     Some(m) if m.starts_with("image/") => Some(Hint::Image),
-                    Some(m) if m.starts_with("video/") || m.starts_with("audio/") => Some(Hint::Video),
+                    Some(m) if m.starts_with("video/") || m.starts_with("audio/") => {
+                        Some(Hint::Video)
+                    }
                     _ => match parent {
                         Some("video") | Some("audio") => Some(Hint::Video),
                         Some("picture") => Some(Hint::Image),
@@ -154,7 +184,9 @@ pub fn extract(base: Option<&Url>, html: &str) -> Vec<Found> {
 
 fn plausible(s: &str) -> bool {
     !s.starts_with('#')
-        && !s.chars().any(|c| "<>{}\"'\\".contains(c) || c.is_whitespace())
+        && !s
+            .chars()
+            .any(|c| "<>{}\"'\\".contains(c) || c.is_whitespace())
         && (s.contains('/') || s.contains('.'))
 }
 
@@ -183,7 +215,11 @@ fn candidates(raw: &str) -> Vec<String> {
         return vec![];
     }
     if !s.chars().any(char::is_whitespace) {
-        return if plausible(s) { vec![s.to_string()] } else { vec![] };
+        return if plausible(s) {
+            vec![s.to_string()]
+        } else {
+            vec![]
+        };
     }
 
     // srcset="a.jpg 480w, b.jpg 800w"
@@ -201,7 +237,10 @@ fn candidates(raw: &str) -> Vec<String> {
         }
     }
     if has_desc {
-        urls.into_iter().filter(|u| plausible(u)).map(String::from).collect()
+        urls.into_iter()
+            .filter(|u| plausible(u))
+            .map(String::from)
+            .collect()
     } else {
         vec![]
     }
@@ -210,7 +249,11 @@ fn candidates(raw: &str) -> Vec<String> {
 fn resolve(base: Option<&Url>, s: &str) -> Option<String> {
     if let Ok(u) = Url::parse(s) {
         // "scheme://..." only; things like "background:url(x)" / "mailto:" / "data:" are not links
-        return if s.contains("://") { Some(u.to_string()) } else { None };
+        return if s.contains("://") {
+            Some(u.to_string())
+        } else {
+            None
+        };
     }
     match base {
         Some(b) => b.join(s).ok().map(|u| u.to_string()),

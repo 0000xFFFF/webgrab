@@ -1,5 +1,5 @@
 use rusqlite::{Connection, OpenFlags};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
 const TEMPLATE: &str = include_str!("graph.html");
@@ -10,7 +10,8 @@ const TEMPLATE: &str = include_str!("graph.html");
 pub fn export(db: &Path, out: &Path) -> Result<(usize, usize, usize), String> {
     let err = |e: &dyn std::fmt::Display| format!("--graph {}: {}", db.display(), e);
     // read-write (never creates): closing it then also removes the -wal/-shm files
-    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(|e| err(&e))?;
+    let conn =
+        Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(|e| err(&e))?;
 
     let mut pages: Vec<Value> = Vec::new();
     {
@@ -94,9 +95,12 @@ pub fn export(db: &Path, out: &Path) -> Result<(usize, usize, usize), String> {
         "edges": edges,
     });
     // "</script>" inside a title must not end the script block
-    let json_text = serde_json::to_string(&data).map_err(|e| err(&e))?.replace("</", "<\\/");
+    let json_text = serde_json::to_string(&data)
+        .map_err(|e| err(&e))?
+        .replace("</", "<\\/");
     let html = TEMPLATE.replace("__GRAPH_DATA__", &json_text);
-    std::fs::write(out, html).map_err(|e| format!("--graph: can't write {}: {}", out.display(), e))?;
+    std::fs::write(out, html)
+        .map_err(|e| format!("--graph: can't write {}: {}", out.display(), e))?;
 
     Ok((pages.len(), media.len(), edges.len()))
 }

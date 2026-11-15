@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -129,27 +129,39 @@ impl Db {
     pub fn open(path: &Path) -> Result<Db, String> {
         let err = |e: &dyn std::fmt::Display| format!("--db {}: {}", path.display(), e);
         let conn = Connection::open(path).map_err(|e| err(&e))?;
-        conn.busy_timeout(Duration::from_secs(10)).map_err(|e| err(&e))?;
+        conn.busy_timeout(Duration::from_secs(10))
+            .map_err(|e| err(&e))?;
         // WAL: fast, and the file can be opened by a viewer while the crawl is running
         conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get::<_, String>(0))
             .map_err(|e| err(&e))?;
         conn.execute_batch("PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")
             .map_err(|e| err(&e))?;
 
-        let ver: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(|e| err(&e))?;
+        let ver: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(|e| err(&e))?;
         if ver > SCHEMA_VERSION {
             return Err(err(&format!("made by a newer webgrab (schema v{})", ver)));
         }
-        conn.execute_batch(&SCHEMA.replace("{NOW}", NOW)).map_err(|e| err(&e))?;
+        conn.execute_batch(&SCHEMA.replace("{NOW}", NOW))
+            .map_err(|e| err(&e))?;
         if ver == 0 {
-            conn.execute_batch(&format!("PRAGMA user_version={}", SCHEMA_VERSION)).map_err(|e| err(&e))?;
+            conn.execute_batch(&format!("PRAGMA user_version={}", SCHEMA_VERSION))
+                .map_err(|e| err(&e))?;
         }
 
         let count = |t: &str| -> usize {
-            conn.query_row(&format!("SELECT COUNT(*) FROM {}", t), [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize
+            conn.query_row(&format!("SELECT COUNT(*) FROM {}", t), [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap_or(0) as usize
         };
         let (pages_loaded, media_loaded) = (count("pages"), count("media"));
-        Ok(Db { conn: Mutex::new(conn), pages_loaded, media_loaded })
+        Ok(Db {
+            conn: Mutex::new(conn),
+            pages_loaded,
+            media_loaded,
+        })
     }
 
     fn with<T>(&self, f: impl FnOnce(&mut Connection) -> rusqlite::Result<T>) -> Result<T, String> {
@@ -158,19 +170,29 @@ impl Db {
     }
 
     fn exists(&self, sql: &str, arg: &str) -> bool {
-        self.with(|c| c.query_row(sql, [arg], |_| Ok(())).optional().map(|o| o.is_some()))
-            .unwrap_or(false)
+        self.with(|c| {
+            c.query_row(sql, [arg], |_| Ok(()))
+                .optional()
+                .map(|o| o.is_some())
+        })
+        .unwrap_or(false)
     }
 
     // ------------------------------------------------------------------ lookups
 
     /// Already handled by an earlier run (saved, or deleted as a duplicate)? Failed/queued ones are retried.
     pub fn media_done(&self, url: &str) -> bool {
-        self.exists("SELECT 1 FROM media WHERE url=?1 AND status IN ('downloaded','duplicate')", url)
+        self.exists(
+            "SELECT 1 FROM media WHERE url=?1 AND status IN ('downloaded','duplicate')",
+            url,
+        )
     }
 
     pub fn has_file_path(&self, path: &str) -> bool {
-        self.exists("SELECT 1 FROM media WHERE file_path=?1 AND status IN ('downloaded','existing')", path)
+        self.exists(
+            "SELECT 1 FROM media WHERE file_path=?1 AND status IN ('downloaded','existing')",
+            path,
+        )
     }
 
     /// (sha256, file path) of every file we have on disk - feeds --nodupes.
@@ -188,7 +210,10 @@ impl Db {
 
     /// Was the page read completely before?
     pub fn page_seen(&self, url: &str) -> bool {
-        self.exists("SELECT 1 FROM pages WHERE url=?1 AND crawled_at IS NOT NULL", url)
+        self.exists(
+            "SELECT 1 FROM pages WHERE url=?1 AND crawled_at IS NOT NULL",
+            url,
+        )
     }
 
     /// url of the first page that had exactly this html
@@ -374,7 +399,13 @@ impl Db {
         })
     }
 
-    pub fn media_failed(&self, url: &str, kind: &str, http: Option<u16>, error: &str) -> Result<(), String> {
+    pub fn media_failed(
+        &self,
+        url: &str,
+        kind: &str,
+        http: Option<u16>,
+        error: &str,
+    ) -> Result<(), String> {
         self.with(|c| {
             c.execute(
                 "INSERT INTO media(url,kind,status,http_status,error) VALUES(?1,?2,'failed',?3,?4)
@@ -388,7 +419,13 @@ impl Db {
     }
 
     /// --hash-existing: a file that was already in --dir (no url).
-    pub fn media_existing(&self, path: &str, kind: &str, size: u64, sha: &str) -> Result<(), String> {
+    pub fn media_existing(
+        &self,
+        path: &str,
+        kind: &str,
+        size: u64,
+        sha: &str,
+    ) -> Result<(), String> {
         self.with(|c| {
             c.execute(
                 &format!(

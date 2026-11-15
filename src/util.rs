@@ -19,9 +19,17 @@ pub fn human(len: f64) -> String {
 pub fn sanitize(name: &str) -> String {
     let s: String = name
         .chars()
-        .map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c })
+        .map(|c| {
+            if c.is_control() || "<>:\"/\\|?*".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
-    s.trim_end_matches(|c| c == ' ' || c == '.').trim_start().to_string()
+    s.trim_end_matches(|c| c == ' ' || c == '.')
+        .trim_start()
+        .to_string()
 }
 
 /// File name from the path part of a URL (percent-decoded, sanitized).
@@ -44,11 +52,7 @@ pub fn file_name_from_url(link: &str) -> Option<String> {
     };
     let dec = percent_decode_str(&raw).decode_utf8_lossy();
     let s = sanitize(&dec);
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    if s.is_empty() { None } else { Some(s) }
 }
 
 /// Lower-cased ".ext" of the URL's path, if any.

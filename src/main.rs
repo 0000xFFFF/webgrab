@@ -13,7 +13,7 @@ mod util;
 use clap::Parser;
 use cli::Cli;
 use db::PageRec;
-use download::{sha256_hex, Ctx};
+use download::{Ctx, sha256_hex};
 use filter::Hint;
 use stats::Stats;
 use std::collections::{HashMap, HashSet};
@@ -23,7 +23,7 @@ use std::process::ExitCode;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Duration;
-use ui::{Printer, K};
+use ui::{K, Printer};
 use url::Url;
 use util::{file_name_from_url, human, strip_fragment, url_ext};
 
@@ -46,7 +46,10 @@ fn run(cli: &Cli) -> u8 {
         return match &cli.graph {
             Some(out) => export_graph(cli, &ui, out),
             None => {
-                ui.always(K::Cer, "no input: give a URL, an .html file, --read <file> or --watch");
+                ui.always(
+                    K::Cer,
+                    "no input: give a URL, an .html file, --read <file> or --watch",
+                );
                 1
             }
         };
@@ -82,18 +85,30 @@ fn run(cli: &Cli) -> u8 {
 
 fn export_graph(cli: &Cli, ui: &Printer, out: &Path) -> u8 {
     let Some(db) = &cli.db else {
-        ui.always(K::Cer, "--graph needs --db <file.db> (the database to draw)");
+        ui.always(
+            K::Cer,
+            "--graph needs --db <file.db> (the database to draw)",
+        );
         return 1;
     };
     if !db.is_file() {
-        ui.always(K::Cer, &format!("--graph: database not found: {}", db.display()));
+        ui.always(
+            K::Cer,
+            &format!("--graph: database not found: {}", db.display()),
+        );
         return 1;
     }
     match graph::export(db, out) {
         Ok((p, m, e)) => {
             ui.always(
                 K::Pri,
-                &format!("graph: {} page(s), {} file(s), {} relationship(s) -> {}", p, m, e, out.display()),
+                &format!(
+                    "graph: {} page(s), {} file(s), {} relationship(s) -> {}",
+                    p,
+                    m,
+                    e,
+                    out.display()
+                ),
             );
             0
         }
@@ -175,7 +190,12 @@ fn page_mode(ctx: &Ctx, input: &str) -> u8 {
             .and_then(|p| Url::from_file_path(p).ok())
             .map(|u| u.to_string())
             .unwrap_or_else(|| input.to_string());
-        fetched = Fetched { html, base: base_arg, status: None, content_type: Some("text/html".into()) };
+        fetched = Fetched {
+            html,
+            base: base_arg,
+            status: None,
+            content_type: Some("text/html".into()),
+        };
     } else {
         if dl_mode {
             ui.say(K::Def, "");
@@ -196,7 +216,12 @@ fn page_mode(ctx: &Ctx, input: &str) -> u8 {
                 if start_url != strip_fragment(input) {
                     ctx.db_redirect(strip_fragment(input), &start_url);
                 }
-                fetched = Fetched { html: buf, base: Url::parse(&final_url).ok(), status: Some(status), content_type };
+                fetched = Fetched {
+                    html: buf,
+                    base: Url::parse(&final_url).ok(),
+                    status: Some(status),
+                    content_type,
+                };
             }
             Err(ureq::Error::Status(code, _)) => {
                 ctx.db_page_failed(strip_fragment(input), Some(code), &format!("HTTP {}", code));
@@ -215,10 +240,16 @@ fn page_mode(ctx: &Ctx, input: &str) -> u8 {
     let len = fetched.html.len();
     if cli.test {
         ui.always(K::Top, "===[ TESTING WEBSITE ]");
-        ui.always(K::Pri, &format!("html size (DLED)..: {} ({} bytes)", human(len as f64), len));
+        ui.always(
+            K::Pri,
+            &format!("html size (DLED)..: {} ({} bytes)", human(len as f64), len),
+        );
         ui.always(K::Inf, &format!("title from html...: {}", title));
     } else if dl_mode {
-        ui.say(K::Pri, &format!("DLED..: {} ({} bytes)", human(len as f64), len));
+        ui.say(
+            K::Pri,
+            &format!("DLED..: {} ({} bytes)", human(len as f64), len),
+        );
         ui.say(K::Def, "");
         ui.say(K::Top, "===[ SCANNING HTML ]");
         ui.say(K::Inf, &format!("title from html.: {}", title));
@@ -230,7 +261,8 @@ fn page_mode(ctx: &Ctx, input: &str) -> u8 {
 // ------------------------------------------------------------------ crawl (--crawl-depth)
 
 fn host_key(u: &Url) -> Option<String> {
-    u.host_str().map(|h| h.trim_start_matches("www.").to_lowercase())
+    u.host_str()
+        .map(|h| h.trim_start_matches("www.").to_lowercase())
 }
 
 /// What one page contains.
@@ -284,12 +316,21 @@ fn scan_page(ctx: &Ctx, base: Option<&Url>, html: &[u8], seen: &mut HashSet<Stri
         ctx.stats.accepted.fetch_add(1, Relaxed);
         files.push(l);
     }
-    Scan { files, media, pages }
+    Scan {
+        files,
+        media,
+        pages,
+    }
 }
 
 /// Pages from `pages` that should be crawled next: same host (unless --external), passing the
 /// --crawl-any/--crawl-must/--crawl-ignore filters, never visited before. Marks them visited.
-fn follow_pages(ctx: &Ctx, pages: Vec<String>, host: &Option<String>, visited: &mut HashSet<String>) -> Vec<String> {
+fn follow_pages(
+    ctx: &Ctx,
+    pages: Vec<String>,
+    host: &Option<String>,
+    visited: &mut HashSet<String>,
+) -> Vec<String> {
     let mut out = Vec::new();
     for p in pages {
         if !ctx.crawl_filters.passes(&p) {
@@ -324,7 +365,9 @@ fn get_page(ctx: &Ctx, url: &str) -> Result<ureq::Response, FetchErr> {
     loop {
         match ctx.get(url).call() {
             Ok(r) => return Ok(r),
-            Err(ureq::Error::Status(429, resp)) if cli.crawl_retry_429 && attempt < cli.crawl_retries => {
+            Err(ureq::Error::Status(429, resp))
+                if cli.crawl_retry_429 && attempt < cli.crawl_retries =>
+            {
                 let backoff = (1000u64 << attempt.min(6)).min(60_000);
                 let asked = resp
                     .header("retry-after")
@@ -340,16 +383,27 @@ fn get_page(ctx: &Ctx, url: &str) -> Result<ureq::Response, FetchErr> {
                         k,
                         &format!(
                             "WAR[429] {} - retry {}/{} in {:.1}s",
-                            url, attempt, cli.crawl_retries, wait as f64 / 1000.0
+                            url,
+                            attempt,
+                            cli.crawl_retries,
+                            wait as f64 / 1000.0
                         ),
                     );
                 }
                 std::thread::sleep(Duration::from_millis(wait));
             }
             Err(ureq::Error::Status(code, _)) => {
-                return Err(FetchErr { status: Some(code), msg: format!("HTTP {}", code) });
+                return Err(FetchErr {
+                    status: Some(code),
+                    msg: format!("HTTP {}", code),
+                });
             }
-            Err(e) => return Err(FetchErr { status: None, msg: e.to_string() }),
+            Err(e) => {
+                return Err(FetchErr {
+                    status: None,
+                    msg: e.to_string(),
+                });
+            }
         }
     }
 }
@@ -372,8 +426,16 @@ fn fetch_page(ctx: &Ctx, url: &str) -> Result<Option<Fetched>, FetchErr> {
     resp.into_reader()
         .take(32 << 20)
         .read_to_end(&mut buf)
-        .map_err(|e| FetchErr { status: Some(status), msg: e.to_string() })?;
-    Ok(Some(Fetched { html: buf, base, status: Some(status), content_type }))
+        .map_err(|e| FetchErr {
+            status: Some(status),
+            msg: e.to_string(),
+        })?;
+    Ok(Some(Fetched {
+        html: buf,
+        base,
+        status: Some(status),
+        content_type,
+    }))
 }
 
 /// Progress lines. In --list/--test mode they go to stderr so stdout stays a clean link list.
@@ -438,7 +500,10 @@ fn handle_page(ctx: &Ctx, st: &mut Crawl, d: usize, url: &str, f: &Fetched) -> V
                     rec.dupe_of = Some(&owner);
                     ctx.db_page_done(&rec);
                     if !ctx.cli.quiet {
-                        ctx.ui.say(K::War, &format!("WAR[DUPLICATE PAGE] {} (same content as {})", url, owner));
+                        ctx.ui.say(
+                            K::War,
+                            &format!("WAR[DUPLICATE PAGE] {} (same content as {})", url, owner),
+                        );
                     }
                     return Vec::new();
                 }
@@ -485,7 +550,10 @@ fn crawl(ctx: &Ctx, start_url: String, start: Fetched) -> u8 {
 
     if start.base.is_none() {
         let k = if cli.list || cli.test { K::Err } else { K::War };
-        ui.say(k, "WAR[--base] local file without --base: only absolute http(s) links can be used");
+        ui.say(
+            k,
+            "WAR[--base] local file without --base: only absolute http(s) links can be used",
+        );
     }
 
     // depth 0: the page we already have
@@ -503,11 +571,24 @@ fn crawl(ctx: &Ctx, start_url: String, start: Fetched) -> u8 {
             if d == max && ctx.page_seen(page) {
                 stats.skipped.fetch_add(1, Relaxed);
                 if !cli.quiet {
-                    ui.say(K::War, &format!("WAR[SKIPPED] {} (page already in the db)", page));
+                    ui.say(
+                        K::War,
+                        &format!("WAR[SKIPPED] {} (page already in the db)", page),
+                    );
                 }
                 continue;
             }
-            crawl_log(ctx, &format!("===[ CRAWL depth {}/{} page {}/{} ]: {}", d, max, i + 1, n, page));
+            crawl_log(
+                ctx,
+                &format!(
+                    "===[ CRAWL depth {}/{} page {}/{} ]: {}",
+                    d,
+                    max,
+                    i + 1,
+                    n,
+                    page
+                ),
+            );
             match fetch_page(ctx, page) {
                 Ok(Some(f)) => {
                     let mut key = page.clone();
@@ -569,7 +650,10 @@ fn read_mode(ctx: &Ctx, path: &Path) -> u8 {
         }
     };
     if cli.crawl_depth > 0 {
-        ui.say(K::War, "WAR[--crawl-depth] is ignored with --read (every line is downloaded as a file)");
+        ui.say(
+            K::War,
+            "WAR[--crawl-depth] is ignored with --read (every line is downloaded as a file)",
+        );
     }
     ui.say(K::Def, "");
     ui.say(K::Top, "===[ SCANNING TEXT FILE ]");
@@ -636,7 +720,10 @@ fn watch(ctx: &Ctx) -> u8 {
 
 #[cfg(not(feature = "clipboard"))]
 fn watch(ctx: &Ctx) -> u8 {
-    ctx.ui.always(K::Cer, "this build has no clipboard support (rebuild with the `clipboard` feature)");
+    ctx.ui.always(
+        K::Cer,
+        "this build has no clipboard support (rebuild with the `clipboard` feature)",
+    );
     1
 }
 
@@ -649,7 +736,10 @@ fn unique(ctx: &Ctx, items: Vec<String>) -> Vec<String> {
     }
     let before = items.len();
     let mut seen = HashSet::new();
-    let out: Vec<String> = items.into_iter().filter(|u| seen.insert(u.clone())).collect();
+    let out: Vec<String> = items
+        .into_iter()
+        .filter(|u| seen.insert(u.clone()))
+        .collect();
     ctx.stats.disposed.fetch_add(before - out.len(), Relaxed);
     out
 }
@@ -668,10 +758,22 @@ fn finish(ctx: &Ctx, links: Vec<String>) -> u8 {
 
 fn print_test_counts(ctx: &Ctx) {
     let s = ctx.stats;
-    ctx.ui.always(K::Inf, &format!("total items.......: {}", s.total.load(Relaxed)));
-    ctx.ui.always(K::Inf, &format!("accepted items....: {}", s.accepted.load(Relaxed)));
-    ctx.ui.always(K::War, &format!("skipped/found.....: {}", s.skipped.load(Relaxed)));
-    ctx.ui.always(K::Eri, &format!("disposed/rejected.: {}", s.disposed.load(Relaxed)));
+    ctx.ui.always(
+        K::Inf,
+        &format!("total items.......: {}", s.total.load(Relaxed)),
+    );
+    ctx.ui.always(
+        K::Inf,
+        &format!("accepted items....: {}", s.accepted.load(Relaxed)),
+    );
+    ctx.ui.always(
+        K::War,
+        &format!("skipped/found.....: {}", s.skipped.load(Relaxed)),
+    );
+    ctx.ui.always(
+        K::Eri,
+        &format!("disposed/rejected.: {}", s.disposed.load(Relaxed)),
+    );
 }
 
 /// `start` = how many links were already printed (keeps the numbering going across pages).
@@ -682,7 +784,10 @@ fn print_list(ctx: &Ctx, links: &[String], start: usize) {
     if cli.verbose {
         let w_num = links.len().to_string().len().max(3);
         let w_url = links.iter().map(|l| l.len()).max().unwrap_or(0).max(3);
-        ui.plain(&format!("{:<w_num$} {:<w_url$} {}", "NUM", "URL", "FILENAME"));
+        ui.plain(&format!(
+            "{:<w_num$} {:<w_url$} {}",
+            "NUM", "URL", "FILENAME"
+        ));
         for (i, l) in links.iter().enumerate() {
             let n = file_name_from_url(l).unwrap_or_default();
             ui.plain(&format!("{:<w_num$} {:<w_url$} {}", i + 1, l, n));
@@ -745,12 +850,14 @@ fn run_downloads(ctx: &Ctx, urls: &[String]) {
         }
         std::thread::scope(|inner| {
             for _ in 0..threads {
-                inner.spawn(|| loop {
-                    let i = next.fetch_add(1, Relaxed);
-                    if i >= urls.len() {
-                        break;
+                inner.spawn(|| {
+                    loop {
+                        let i = next.fetch_add(1, Relaxed);
+                        if i >= urls.len() {
+                            break;
+                        }
+                        let _ = ctx.download(&urls[i]);
                     }
-                    let _ = ctx.download(&urls[i]);
                 });
             }
         });
@@ -789,14 +896,35 @@ fn print_debug(ctx: &Ctx) {
     ui.always(K::Top, "===[ DEBUG ]");
     ui.always(K::Inf, &format!("total/found/all.....: {}", g(&s.total)));
     ui.always(K::Inf, &format!("accepted/valid......: {}", g(&s.accepted)));
-    ui.always(K::Cur, &format!("count/processed.....: {}", g(&s.processed)));
-    ui.always(K::Pri, &format!("dled/downloaded.....: {} ({} ({} bytes))", g(&s.dled), human(bytes as f64), bytes));
+    ui.always(
+        K::Cur,
+        &format!("count/processed.....: {}", g(&s.processed)),
+    );
+    ui.always(
+        K::Pri,
+        &format!(
+            "dled/downloaded.....: {} ({} ({} bytes))",
+            g(&s.dled),
+            human(bytes as f64),
+            bytes
+        ),
+    );
     ui.always(K::War, &format!("renamed.............: {}", g(&s.renamed)));
     ui.always(K::War, &format!("replaced............: {}", g(&s.replaced)));
-    ui.always(K::War, &format!("same hash (deleted).: {}", g(&s.hash_dupes)));
+    ui.always(
+        K::War,
+        &format!("same hash (deleted).: {}", g(&s.hash_dupes)),
+    );
     ui.always(K::War, &format!("skipped/found.......: {}", g(&s.skipped)));
     if g(&s.pages) > 0 {
-        ui.always(K::Cur, &format!("pages crawled.......: {} ({} duplicate)", g(&s.pages), g(&s.page_dupes)));
+        ui.always(
+            K::Cur,
+            &format!(
+                "pages crawled.......: {} ({} duplicate)",
+                g(&s.pages),
+                g(&s.page_dupes)
+            ),
+        );
     }
     ui.always(K::Eri, &format!("disposed/rejected...: {}", g(&s.disposed)));
     ui.always(K::Eri, &format!("failed..............: {}", g(&s.failed)));

@@ -61,7 +61,13 @@ pub struct Cli {
 
     // ------------------------------------------------------------- download
     /// How many files to download at the same time
-    #[arg(short = 't', long, default_value_t = 1, value_name = "NUM", help_heading = "Download")]
+    #[arg(
+        short = 't',
+        long,
+        default_value_t = 1,
+        value_name = "NUM",
+        help_heading = "Download"
+    )]
     pub threads: usize,
 
     /// Save files into this directory (created if missing)
@@ -128,7 +134,12 @@ pub struct Cli {
     pub base: Option<String>,
 
     /// Seconds without data before a request is abandoned
-    #[arg(long, default_value_t = 60, value_name = "SECS", help_heading = "Download")]
+    #[arg(
+        long,
+        default_value_t = 60,
+        value_name = "SECS",
+        help_heading = "Download"
+    )]
     pub timeout: u64,
 
     // ---------------------------------------------------------------- crawl
@@ -139,19 +150,40 @@ pub struct Cli {
     /// --external is given, each page once, and only if they pass the --crawl-any/--crawl-must/
     /// --crawl-ignore filters. Use --unique so a file shown on many pages is downloaded once.
     /// Pages are not saved unless you add --codec. Applies to a page URL / .html file, not --read.
-    #[arg(short = 'D', long, default_value_t = 0, value_name = "NUM", help_heading = "Crawl")]
+    #[arg(
+        short = 'D',
+        long,
+        default_value_t = 0,
+        value_name = "NUM",
+        help_heading = "Crawl"
+    )]
     pub crawl_depth: usize,
 
     /// Only follow pages whose URL contains ANY of these (comma separated, repeatable)
-    #[arg(long, value_delimiter = ',', value_name = "KEYWORD", help_heading = "Crawl")]
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "KEYWORD",
+        help_heading = "Crawl"
+    )]
     pub crawl_any: Vec<String>,
 
     /// Only follow pages whose URL contains ALL of these
-    #[arg(long, value_delimiter = ',', value_name = "KEYWORD", help_heading = "Crawl")]
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "KEYWORD",
+        help_heading = "Crawl"
+    )]
     pub crawl_must: Vec<String>,
 
     /// Never follow pages whose URL contains any of these (e.g. --crawl-ignore logout,login)
-    #[arg(long, value_delimiter = ',', value_name = "KEYWORD", help_heading = "Crawl")]
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "KEYWORD",
+        help_heading = "Crawl"
+    )]
     pub crawl_ignore: Vec<String>,
 
     /// Wait this many milliseconds before every page request (avoids HTTP 429)
@@ -196,15 +228,33 @@ pub struct Cli {
 
     // -------------------------------------------------------------- filters
     /// Keep only files whose URL contains ANY of these (comma separated, repeatable)
-    #[arg(short = 'a', long, value_delimiter = ',', value_name = "KEYWORD", help_heading = "Filters")]
+    #[arg(
+        short = 'a',
+        long,
+        value_delimiter = ',',
+        value_name = "KEYWORD",
+        help_heading = "Filters"
+    )]
     pub any: Vec<String>,
 
     /// Keep only files whose URL contains ALL of these
-    #[arg(short = 'm', long, value_delimiter = ',', value_name = "KEYWORD", help_heading = "Filters")]
+    #[arg(
+        short = 'm',
+        long,
+        value_delimiter = ',',
+        value_name = "KEYWORD",
+        help_heading = "Filters"
+    )]
     pub must: Vec<String>,
 
     /// Drop files whose URL contains any of these
-    #[arg(short = 'i', long, value_delimiter = ',', value_name = "KEYWORD", help_heading = "Filters")]
+    #[arg(
+        short = 'i',
+        long,
+        value_delimiter = ',',
+        value_name = "KEYWORD",
+        help_heading = "Filters"
+    )]
     pub ignore: Vec<String>,
 
     /// --video --image --other
@@ -285,7 +335,9 @@ pub fn normalized_args() -> Vec<OsString> {
             let body = if let Some(r) = s.strip_prefix("--") {
                 r
             } else if let Some(r) = s.strip_prefix('-') {
-                if r.chars().count() > 1 && r.chars().next().map_or(false, |c| c.is_ascii_alphabetic()) {
+                if r.chars().count() > 1
+                    && r.chars().next().map_or(false, |c| c.is_ascii_alphabetic())
+                {
                     r
                 } else {
                     return a;

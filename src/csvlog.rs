@@ -18,7 +18,9 @@ struct Row {
 }
 
 fn encode(rec: &[&str]) -> std::io::Result<Vec<u8>> {
-    let mut w = csv::WriterBuilder::new().has_headers(false).from_writer(Vec::new());
+    let mut w = csv::WriterBuilder::new()
+        .has_headers(false)
+        .from_writer(Vec::new());
     w.write_record(rec)?;
     w.into_inner()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
@@ -86,10 +88,26 @@ impl CsvLog {
                 }
                 let f = |i: usize| rec.get(i).unwrap_or("").trim().to_string();
                 let row = if legacy {
-                    Row { kind: MEDIA, url: f(0), name: f(1), hash: f(2), dupe: f(3) == "1" }
+                    Row {
+                        kind: MEDIA,
+                        url: f(0),
+                        name: f(1),
+                        hash: f(2),
+                        dupe: f(3) == "1",
+                    }
                 } else {
-                    let kind = if f(0).eq_ignore_ascii_case(PAGE) { PAGE } else { MEDIA };
-                    Row { kind, url: f(1), name: f(2), hash: f(3), dupe: f(4) == "1" }
+                    let kind = if f(0).eq_ignore_ascii_case(PAGE) {
+                        PAGE
+                    } else {
+                        MEDIA
+                    };
+                    Row {
+                        kind,
+                        url: f(1),
+                        name: f(2),
+                        hash: f(3),
+                        dupe: f(4) == "1",
+                    }
                 };
                 if row.url.is_empty() && row.name.is_empty() {
                     bad += 1;
@@ -106,7 +124,16 @@ impl CsvLog {
             let tmp = with_suffix(path, ".tmp");
             let mut out = encode(&HEADER).map_err(|e| err(&e))?;
             for r in &rows {
-                out.extend(encode(&[r.kind, &r.url, &r.name, &r.hash, if r.dupe { "1" } else { "0" }]).map_err(|e| err(&e))?);
+                out.extend(
+                    encode(&[
+                        r.kind,
+                        &r.url,
+                        &r.name,
+                        &r.hash,
+                        if r.dupe { "1" } else { "0" },
+                    ])
+                    .map_err(|e| err(&e))?,
+                );
             }
             fs::write(&tmp, &out).map_err(|e| err(&e))?;
             fs::rename(&tmp, path).map_err(|e| err(&e))?;
@@ -123,7 +150,9 @@ impl CsvLog {
                     pages.insert(r.url.clone());
                 }
                 if !r.dupe && !r.hash.is_empty() {
-                    page_hashes.entry(r.hash.clone()).or_insert_with(|| r.url.clone());
+                    page_hashes
+                        .entry(r.hash.clone())
+                        .or_insert_with(|| r.url.clone());
                 }
             } else {
                 if !r.url.is_empty() {
@@ -146,7 +175,8 @@ impl CsvLog {
             .map_err(|e| err(&e))?;
         let len = file.metadata().map_err(|e| err(&e))?.len();
         if len == 0 {
-            file.write_all(&encode(&HEADER).map_err(|e| err(&e))?).map_err(|e| err(&e))?;
+            file.write_all(&encode(&HEADER).map_err(|e| err(&e))?)
+                .map_err(|e| err(&e))?;
             file.sync_data().map_err(|e| err(&e))?;
         } else {
             // a run killed mid-write may have left a last line without newline
@@ -172,16 +202,26 @@ impl CsvLog {
     }
 
     pub fn has_media_url(&self, url: &str) -> bool {
-        self.media_urls.lock().unwrap_or_else(|e| e.into_inner()).contains(url)
+        self.media_urls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(url)
     }
 
     pub fn has_page(&self, url: &str) -> bool {
-        self.pages.lock().unwrap_or_else(|e| e.into_inner()).contains(url)
+        self.pages
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(url)
     }
 
     /// URL of the first (non-duplicate) page that had this content.
     pub fn page_hash_owner(&self, hash: &str) -> Option<String> {
-        self.page_hashes.lock().unwrap_or_else(|e| e.into_inner()).get(hash).cloned()
+        self.page_hashes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(hash)
+            .cloned()
     }
 
     pub fn loaded_hashes(&self) -> &[(String, String)] {
@@ -194,7 +234,14 @@ impl CsvLog {
 
     /// Append one row and make sure it is on disk. Fields containing commas, quotes or
     /// newlines are quoted/escaped by the csv writer.
-    pub fn write_row(&self, kind: &str, url: &str, name: &str, hash: &str, dupe: bool) -> std::io::Result<()> {
+    pub fn write_row(
+        &self,
+        kind: &str,
+        url: &str,
+        name: &str,
+        hash: &str,
+        dupe: bool,
+    ) -> std::io::Result<()> {
         let buf = encode(&[kind, url, name, hash, if dupe { "1" } else { "0" }])?;
 
         let mut f = self.file.lock().unwrap_or_else(|e| e.into_inner());
@@ -205,7 +252,10 @@ impl CsvLog {
 
         if kind == PAGE {
             if !url.is_empty() {
-                self.pages.lock().unwrap_or_else(|e| e.into_inner()).insert(url.to_string());
+                self.pages
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(url.to_string());
             }
             if !dupe && !hash.is_empty() {
                 self.page_hashes
@@ -215,7 +265,10 @@ impl CsvLog {
                     .or_insert_with(|| url.to_string());
             }
         } else if !url.is_empty() {
-            self.media_urls.lock().unwrap_or_else(|e| e.into_inner()).insert(url.to_string());
+            self.media_urls
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(url.to_string());
         }
         Ok(())
     }
