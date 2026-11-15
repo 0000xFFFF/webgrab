@@ -186,19 +186,30 @@ pub struct Cli {
     )]
     pub crawl_ignore: Vec<String>,
 
-    /// Wait this many milliseconds before every page request (avoids HTTP 429)
+    /// Minimum pause in milliseconds before every page request (avoids HTTP 429).
+    ///
+    /// This is the floor of the crawl pause. The crawler also learns a pause of its own from
+    /// HTTP 429 answers (see --crawl-no-retry-429): before every page request it waits
+    /// whichever is LARGER, this value or the learned pause, plus up to 10% random.
+    /// Default 0 = no fixed minimum, only the learned pause (which starts at 0).
     #[arg(long, default_value_t = 0, value_name = "MS", help_heading = "Crawl")]
     pub crawl_sleep: u64,
 
-    /// Disable retries when a page responds with HTTP 429.
+    /// Don't retry or learn when a page answers HTTP 429 (Too Many Requests).
     ///
-    /// By default, the crawler retries with exponential backoff (1s, 2s, 4s ... max 60s).
-    /// The server's `Retry-After` header is respected if it requests a longer wait,
-    /// and a random offset is added to each wait to avoid synchronized retries.
+    /// By default a 429 is handled in two ways.
+    ///
+    /// 1. RETRY: the page is retried with exponential backoff (1s, 2s, 4s ... max 60s). The server's `Retry-After` header is respected if it asks for a longer wait, the wait is never shorter than the learned pause (see 2.), and a random offset (up to 20% + 250 ms) is added.
+    ///
+    /// 2. LEARN: the crawler measures how long the failed request took and which pause it had used before it, then raises its calibrated pause to the largest of: 1.5x the old calibrated pause, 2x the pause that failed, 2x the time the failed request took, 500 ms (max 60s). Every following page request waits that calibrated pause, so after being 429-ed once it slows down instead of hitting the limit again. If the server still answers 429 the pause is raised again.
+    ///
+    /// The pause before each page request is max(--crawl-sleep, calibrated pause) + up to 10% random. The calibrated pause is not saved between runs.
+    ///
+    /// With this flag a 429 is not retried and nothing is learned: the page counts as failed (recorded in --db and retried on the next run).
     #[arg(long, help_heading = "Crawl")]
     pub crawl_no_retry_429: bool,
 
-    /// With how many times to retry one page before giving up
+    /// How many times to retry one page that keeps answering HTTP 429 before giving up
     #[arg(long, default_value_t = 6, value_name = "NUM", help_heading = "Crawl")]
     pub crawl_retries: u32,
 

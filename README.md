@@ -24,9 +24,9 @@ webgrab -w [flags]
 | `-d DIR` | `--dir DIR` | download folder |
 | `-R` | `--recursive` | `--skip` and `--hash-existing` also look in subfolders |
 | `-D N` | `--crawl-depth N` | crawl depth (default 0 = only the given page, see below) |
-| | `--crawl-sleep MS` | wait this long before every page request (avoid HTTP 429) |
-| | `--crawl-retry-429` | on HTTP 429 retry the page with exponential backoff + random offset |
-| | `--crawl-retries N` | max retries per page for `--crawl-retry-429` (default 6) |
+| | `--crawl-sleep MS` | minimum pause before every page request; the learned 429 pause is used instead when larger |
+| | `--crawl-no-retry-429` | don't retry or learn on HTTP 429 (both are on by default) |
+| | `--crawl-retries N` | max retries per page after HTTP 429 (default 6) |
 | | `--external` | with `--crawl-depth`: also follow links to other hosts |
 | | `--crawl-any a,b` | only follow pages whose URL contains ANY of these |
 | | `--crawl-must a,b` | only follow pages whose URL contains ALL of these |
@@ -70,11 +70,16 @@ Links on a page are split into **pages** and **files**:
 page is scanned. Which pages are followed is decided by `--crawl-any/--crawl-must/--crawl-ignore` (`--ignore`
 only concerns files); pages themselves are only saved with `--codec`. Use `--unique` so a file shown on many pages is fetched once. `--list --crawl-depth N` prints the
 files found while crawling (progress goes to stderr); for a local .html file add `--base`.
-**Rate limits:** `--crawl-sleep 1500` waits 1.5 s before every page request. `--crawl-retry-429` handles a
-server that answers HTTP 429 anyway: the page is retried after 1 s, 2 s, 4 s ... (max 60 s; a longer
-`Retry-After` from the server wins), each wait plus a random offset (up to 20% + 250 ms) so it isn't a fixed
-rhythm. After `--crawl-retries` failed tries the page is counted as failed and the crawl moves on. These
-apply to page requests only; file downloads are not throttled.
+**Rate limits:** HTTP 429 is handled by default. The page is retried after 1 s, 2 s, 4 s ... (max 60 s; a longer
+`Retry-After` from the server wins, and the wait is never below the learned pause), each wait plus a random
+offset (up to 20% + 250 ms). After `--crawl-retries` failed tries the page is counted as failed and the crawl
+moves on. The crawler also **learns**: each 429 measures how long the failed request took and which pause was used
+before it, and raises a calibrated pause to the largest of 1.5x the old one, 2x the failed pause, 2x the request time
+and 500 ms (max 60 s). Every later page request waits `max(--crawl-sleep, calibrated pause)` + up to 10% random, so
+after one 429 the crawl slows down instead of running into the limit again (raised again if it still happens).
+`--crawl-sleep MS` is therefore the *minimum* pause; the calibrated pause is used when larger and is not saved
+between runs. `--crawl-no-retry-429` switches retrying and learning off. These apply to page requests only; file
+downloads are not throttled.
 Resuming a crawl: with `--db` every crawled page is recorded once its files are done. On a re-run,
 pages at the last depth that are already in the db are skipped; recorded pages *above* it are read again
 only to find the pages below them (their files are skipped), otherwise an interrupted crawl could never

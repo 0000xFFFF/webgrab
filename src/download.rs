@@ -46,6 +46,20 @@ pub struct Ctx<'a> {
     hashes: Mutex<HashMap<String, String>>,
     /// --db: pages, files and how they are connected
     db: Option<Db>,
+    /// crawl pacing learned from HTTP 429 answers (see `Pace`)
+    pub pace: Mutex<Pace>,
+}
+
+/// Crawl pacing. Starts at 0; every HTTP 429 raises `learned_ms` so the next requests are
+/// spaced far enough apart not to be rate limited again.
+#[derive(Default)]
+pub struct Pace {
+    /// calibrated pause between two page requests (ms), 0 until the first 429
+    pub learned_ms: u64,
+    /// the pause actually used before the most recent request (ms)
+    pub last_pause_ms: u64,
+    /// how many HTTP 429 answers were received so far
+    pub hits: u32,
 }
 
 fn hex_of_file(path: &Path) -> io::Result<String> {
@@ -145,6 +159,7 @@ impl<'a> Ctx<'a> {
             reserved: Mutex::new(HashSet::new()),
             hashes: Mutex::new(hashes),
             db,
+            pace: Mutex::new(Pace::default()),
         };
 
         if cli.hash_existing && downloading {

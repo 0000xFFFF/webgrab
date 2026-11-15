@@ -22,7 +22,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use ui::{K, Printer};
 use url::Url;
 use util::{file_name_from_url, human, strip_fragment, url_ext};
@@ -357,25 +357,81 @@ fn rand_below(max: u64) -> u64 {
     RandomState::new().build_hasher().finish() % max
 }
 
-/// GET a page. HTTP 429 is retried with exponential backoff
-/// (1s, 2s, 4s ... max 60s, or the server's Retry-After if longer) plus a random offset.
+/// The pause before the next page request: the larger of --crawl-sleep (the minimum) and the
+/// sleep calibrated from earlier 429s, plus up to 10% random so it isn't a fixed rhythm.
+fn page_pause(ctx: &Ctx) -> u64 {
+    let mut p = ctx.pace.lock().unwrap_or_else(|e| e.into_inner());
+    let base = ctx.cli.crawl_sleep.max(p.learned_ms);
+    let pause = base + rand_below(base / 10 + 1);
+    p.last_pause_ms = pause;
+    pause
+}
+
+/// A 429 arrived. `used` = the pause we had left before this request, `took` = how long the
+/// failed request itself took. Raise the calibrated sleep above what was evidently too fast:
+/// at least 1.5x the old value, 2x the pause that failed, 2x the answer time, and 500 ms.
+fn learn_from_429(ctx: &Ctx, url: &str, used: u64, took: Duration) {
+    let (old, new) = {
+        let mut p = ctx.pace.lock().unwrap_or_else(|e| e.into_inner());
+        let old = p.learned_ms;
+        let took_ms = took.as_millis() as u64;
+        let new = (old + old / 2)
+            .max(used.saturating_mul(2))
+            .max(took_ms.saturating_mul(2))
+            .max(500)
+            .min(60_000);
+        p.learned_ms = new;
+        p.hits += 1;
+        (old, new)
+    };
+    if !ctx.cli.quiet {
+        let k = if ctx.cli.list || ctx.cli.test { K::Err } else { K::War };
+        ctx.ui.say(
+            k,
+            &format!(
+                "WAR[429] {} - failed request took {} ms after a {:.1}s pause; crawl sleep calibrated {:.1}s -> {:.1}s",
+                url,
+                took.as_millis(),
+                used as f64 / 1000.0,
+                old as f64 / 1000.0,
+                new as f64 / 1000.0
+            ),
+        );
+    }
+}
+
+/// GET a page. Waits the (calibrated) pause first. HTTP 429 is retried with exponential backoff
+/// (1s, 2s, 4s ... max 60s, or the server's Retry-After if longer) plus a random offset, and every
+/// 429 teaches the crawler a longer pause for the pages after it.
 fn get_page(ctx: &Ctx, url: &str) -> Result<ureq::Response, FetchErr> {
     let cli = ctx.cli;
     let mut attempt: u32 = 0;
+    let mut pause = page_pause(ctx);
     loop {
+        if pause > 0 {
+            std::thread::sleep(Duration::from_millis(pause));
+        }
+        let started = Instant::now();
         match ctx.get(url).call() {
             Ok(r) => return Ok(r),
-            Err(ureq::Error::Status(429, resp))
-                if !cli.crawl_no_retry_429 && attempt < cli.crawl_retries =>
-            {
+            Err(ureq::Error::Status(429, resp)) => {
+                learn_from_429(ctx, url, pause, started.elapsed());
+                if cli.crawl_no_retry_429 || attempt >= cli.crawl_retries {
+                    return Err(FetchErr {
+                        status: Some(429),
+                        msg: "HTTP 429".into(),
+                    });
+                }
                 let backoff = (1000u64 << attempt.min(6)).min(60_000);
                 let asked = resp
                     .header("retry-after")
                     .and_then(|v| v.trim().parse::<u64>().ok())
                     .map(|s| s.saturating_mul(1000).min(120_000))
                     .unwrap_or(0);
-                let base = backoff.max(asked);
-                let wait = base + rand_below(base / 5 + 250); // + up to 20% and 250 ms
+                // never wait less than the newly calibrated pause
+                let learned = ctx.pace.lock().unwrap_or_else(|e| e.into_inner()).learned_ms;
+                let base = backoff.max(asked).max(learned);
+                pause = base + rand_below(base / 5 + 250); // + up to 20% and 250 ms
                 attempt += 1;
                 if !cli.quiet {
                     let k = if cli.list || cli.test { K::Err } else { K::War };
@@ -386,11 +442,10 @@ fn get_page(ctx: &Ctx, url: &str) -> Result<ureq::Response, FetchErr> {
                             url,
                             attempt,
                             cli.crawl_retries,
-                            wait as f64 / 1000.0
+                            pause as f64 / 1000.0
                         ),
                     );
                 }
-                std::thread::sleep(Duration::from_millis(wait));
             }
             Err(ureq::Error::Status(code, _)) => {
                 return Err(FetchErr {
@@ -410,9 +465,6 @@ fn get_page(ctx: &Ctx, url: &str) -> Result<ureq::Response, FetchErr> {
 
 /// Ok(None) = the response is not HTML (not crawled).
 fn fetch_page(ctx: &Ctx, url: &str) -> Result<Option<Fetched>, FetchErr> {
-    if ctx.cli.crawl_sleep > 0 {
-        std::thread::sleep(Duration::from_millis(ctx.cli.crawl_sleep));
-    }
     let resp = get_page(ctx, url)?;
     let content_type = resp.header("content-type").map(|c| c.to_string());
     if let Some(ct) = &content_type {
