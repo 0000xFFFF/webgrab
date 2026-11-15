@@ -1,6 +1,6 @@
 [package]
 name = "webgrab"
-version = "3.1.0"
+version = "3.2.0"
 edition = "2024"
 description = "Web page file scanner / downloader"
 
