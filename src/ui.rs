@@ -28,10 +28,10 @@ pub fn stdout_is_tty() -> bool {
 }
 
 impl Printer {
-    /// Colors are on by default; --nocolor and the NO_COLOR variable turn them off, and so does
+    /// Colors are on by default; --colorless and the COLORLESS variable turn them off, and so does
     /// redirecting the output to a file or a pipe (so logs don't fill up with escape codes).
-    pub fn new(nocolor: bool, compact: bool) -> Self {
-        let off = nocolor || std::env::var_os("NO_COLOR").map_or(false, |v| !v.is_empty());
+    pub fn new(colorless: bool, compact: bool) -> Self {
+        let off = colorless || std::env::var_os("COLORLESS").map_or(false, |v| !v.is_empty());
         Self {
             color_out: !off && std::io::stdout().is_terminal(),
             color_err: !off && std::io::stderr().is_terminal(),

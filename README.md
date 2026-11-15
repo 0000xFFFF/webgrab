@@ -44,9 +44,9 @@ webgrab -w [flags]
 | `-m` | `--must a,b` | file link must contain ALL of these |
 | `-i` | `--ignore a,b` | file link must contain NONE of these |
 | `-M` | `--media` | + `--video --image --other --codec` |
-| `-q` `-v` `-f` | `--clean --verbose --filename` | + `--compact`; `--nocolor` turns colors off |
+| `-q` `-v` `-f` | `--quiet --verbose --filename` | + `--compact`; `--colorless` turns colors off |
 
-Defaults: colors are on (off when output goes to a file/pipe, with `--nocolor`, or when `NO_COLOR` is set);
+Defaults: colors are on (off when output goes to a file/pipe, with `--colorless`, or when `COLORLESS` is set);
 downloads are counted as `DLED[done/total]` (and `DING[started/total]` with `--verbose`); every link must be
 http(s). `--list` numbers links (`[1] url`) only on a terminal; piped output is one bare URL per line.
 

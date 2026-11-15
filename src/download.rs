@@ -220,9 +220,9 @@ impl<'a> Ctx<'a> {
         true
     }
 
-    /// Warnings/errors are hidden with --clean (and --compact).
+    /// Warnings/errors are hidden with --quiet (and --compact).
     fn note(&self, k: K, text: &str) {
-        if !self.cli.clean {
+        if !self.cli.quiet {
             self.ui.say(k, text);
         }
     }

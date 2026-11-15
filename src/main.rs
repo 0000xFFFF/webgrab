@@ -38,7 +38,7 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: &Cli) -> u8 {
-    let ui = Printer::new(cli.nocolor, cli.compact);
+    let ui = Printer::new(cli.colorless, cli.compact);
     let stats = Stats::default();
 
     // --db crawl.db --graph crawl.html (nothing to download): just draw an earlier crawl
@@ -334,7 +334,7 @@ fn get_page(ctx: &Ctx, url: &str) -> Result<ureq::Response, FetchErr> {
                 let base = backoff.max(asked);
                 let wait = base + rand_below(base / 5 + 250); // + up to 20% and 250 ms
                 attempt += 1;
-                if !cli.clean {
+                if !cli.quiet {
                     let k = if cli.list || cli.test { K::Err } else { K::War };
                     ctx.ui.say(
                         k,
@@ -379,7 +379,7 @@ fn fetch_page(ctx: &Ctx, url: &str) -> Result<Option<Fetched>, FetchErr> {
 /// Progress lines. In --list/--test mode they go to stderr so stdout stays a clean link list.
 fn crawl_log(ctx: &Ctx, text: &str) {
     if ctx.cli.list || ctx.cli.test {
-        if !ctx.cli.clean {
+        if !ctx.cli.quiet {
             ctx.ui.say(K::Err, text);
         }
     } else {
@@ -437,7 +437,7 @@ fn handle_page(ctx: &Ctx, st: &mut Crawl, d: usize, url: &str, f: &Fetched) -> V
                     ctx.stats.page_dupes.fetch_add(1, Relaxed);
                     rec.dupe_of = Some(&owner);
                     ctx.db_page_done(&rec);
-                    if !ctx.cli.clean {
+                    if !ctx.cli.quiet {
                         ctx.ui.say(K::War, &format!("WAR[DUPLICATE PAGE] {} (same content as {})", url, owner));
                     }
                     return Vec::new();
@@ -502,7 +502,7 @@ fn crawl(ctx: &Ctx, start_url: String, start: Fetched) -> u8 {
         for (i, page) in level.iter().enumerate() {
             if d == max && ctx.page_seen(page) {
                 stats.skipped.fetch_add(1, Relaxed);
-                if !cli.clean {
+                if !cli.quiet {
                     ui.say(K::War, &format!("WAR[SKIPPED] {} (page already in the db)", page));
                 }
                 continue;
@@ -534,7 +534,7 @@ fn crawl(ctx: &Ctx, start_url: String, start: Fetched) -> u8 {
                 Err(e) => {
                     stats.failed.fetch_add(1, Relaxed);
                     ctx.db_page_failed(page, e.status, &e.msg);
-                    if !cli.clean {
+                    if !cli.quiet {
                         ui.say(K::Err, &format!("ERR[{}] {}", e.msg, page));
                     }
                 }

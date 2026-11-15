@@ -229,16 +229,16 @@ pub struct Cli {
     pub compact: bool,
     /// Don't print errors/warnings (only successful downloads)
     #[arg(short = 'q', long, help_heading = "Display")]
-    pub clean: bool,
+    pub quiet: bool,
     /// More detail (DING lines, table output with --list, debug block at the end)
     #[arg(short = 'v', long, help_heading = "Display")]
     pub verbose: bool,
     /// With --list: print only the file names
     #[arg(short = 'f', long, help_heading = "Display")]
     pub filename: bool,
-    /// No colors (they are on by default, except when the output goes to a file or pipe; NO_COLOR works too)
+    /// No colors (they are on by default, except when the output goes to a file or pipe; COLORLESS works too)
     #[arg(long, help_heading = "Display")]
-    pub nocolor: bool,
+    pub colorless: bool,
 }
 
 impl Cli {
