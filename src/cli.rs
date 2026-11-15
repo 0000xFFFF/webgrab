@@ -20,7 +20,7 @@ EXAMPLES:
   webgrab https://example.com/gallery --media --threads 8
   webgrab https://example.com/gallery --list --image --unique
   webgrab https://example.com/gallery --crawl-depth 2 --image --unique -t 8 -d pics
-  webgrab https://example.com/gallery -D 3 --media -u --crawl-sleep 1500 --crawl-retry-429
+  webgrab https://example.com/gallery -D 3 --media -u --crawl-sleep 1500
   webgrab https://example.com/gallery --crawl-depth 1 --list --media --unique
   webgrab page.html --list --base https://example.com/ --video
   webgrab --db crawl.db --nodupes --unique download_links.html
@@ -190,15 +190,15 @@ pub struct Cli {
     #[arg(long, default_value_t = 0, value_name = "MS", help_heading = "Crawl")]
     pub crawl_sleep: u64,
 
-    /// When a page answers HTTP 429, wait and try again
+    /// Disable retries when a page responds with HTTP 429.
     ///
-    /// The wait doubles every time (1s, 2s, 4s ... max 60s), a Retry-After header from the
-    /// server is respected if it asks for longer, and a random offset is added to every wait
-    /// so the timing is never exactly the same.
+    /// By default, the crawler retries with exponential backoff (1s, 2s, 4s ... max 60s).
+    /// The server's `Retry-After` header is respected if it requests a longer wait,
+    /// and a random offset is added to each wait to avoid synchronized retries.
     #[arg(long, help_heading = "Crawl")]
-    pub crawl_retry_429: bool,
+    pub crawl_no_retry_429: bool,
 
-    /// With --crawl-retry-429: how many times to retry one page before giving up
+    /// With how many times to retry one page before giving up
     #[arg(long, default_value_t = 6, value_name = "NUM", help_heading = "Crawl")]
     pub crawl_retries: u32,
 

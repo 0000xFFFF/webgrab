@@ -357,7 +357,7 @@ fn rand_below(max: u64) -> u64 {
     RandomState::new().build_hasher().finish() % max
 }
 
-/// GET a page. With --crawl-retry-429, an HTTP 429 is retried with exponential backoff
+/// GET a page. HTTP 429 is retried with exponential backoff
 /// (1s, 2s, 4s ... max 60s, or the server's Retry-After if longer) plus a random offset.
 fn get_page(ctx: &Ctx, url: &str) -> Result<ureq::Response, FetchErr> {
     let cli = ctx.cli;
@@ -366,7 +366,7 @@ fn get_page(ctx: &Ctx, url: &str) -> Result<ureq::Response, FetchErr> {
         match ctx.get(url).call() {
             Ok(r) => return Ok(r),
             Err(ureq::Error::Status(429, resp))
-                if cli.crawl_retry_429 && attempt < cli.crawl_retries =>
+                if !cli.crawl_no_retry_429 && attempt < cli.crawl_retries =>
             {
                 let backoff = (1000u64 << attempt.min(6)).min(60_000);
                 let asked = resp
