@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize};
 pub struct Stats {
     pub total: AtomicUsize,      // every candidate found
     pub accepted: AtomicUsize,   // passed the filters
+    pub queued: AtomicUsize,     // downloads handed to the workers so far ("to download")
     pub processed: AtomicUsize,  // download attempts started
     pub dled: AtomicUsize,       // files saved
     pub bytes: AtomicU64,        // bytes saved

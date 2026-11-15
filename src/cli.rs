@@ -14,18 +14,20 @@ SKIP / DUPLICATE RULES (what each one checks):
   --skip       the same file NAME already exists in --dir
                (only the name is compared! if two different links give different files
                with the same name, --skip and --replace can treat them as one file)
-  --live-csv   remembers every URL/file/hash it handled, so re-running the same command resumes
+  --db         remembers every page, file and hash it handled, so re-running the same command resumes
 
 EXAMPLES:
-  webgrab https://example.com/gallery --grab --threads 8
+  webgrab https://example.com/gallery --media --threads 8
   webgrab https://example.com/gallery --list --image --unique
   webgrab https://example.com/gallery --crawl-depth 2 --image --unique -t 8 -d pics
   webgrab https://example.com/gallery -D 3 --media -u --crawl-sleep 1500 --crawl-retry-429
   webgrab https://example.com/gallery --crawl-depth 1 --list --media --unique
   webgrab page.html --list --base https://example.com/ --video
-  webgrab --live-csv data.csv --nodupes --unique download_links.html
-  webgrab --read urls.txt --media -t 4 -d downloads --live-csv log.csv --hash-existing -R
-  webgrab \"https://www.youtube.com/watch?v=XXXXXXXXXXX\" --valid --image --unique --must maxres";
+  webgrab --db crawl.db --nodupes --unique download_links.html
+  webgrab https://example.com -D 2 --media -u -n -t 4 -d pics --db crawl.db --graph crawl.html
+  webgrab --db crawl.db --graph crawl.html          (just draw the graph of an earlier crawl)
+  webgrab --read urls.txt --media -t 4 -d downloads --db log.db --hash-existing -R
+  webgrab \"https://www.youtube.com/watch?v=XXXXXXXXXXX\" --image --unique --must maxres";
 
 #[derive(Parser, Debug)]
 #[command(
@@ -70,10 +72,6 @@ pub struct Cli {
     #[arg(short = 'R', long, help_heading = "Download")]
     pub recursive: bool,
 
-    /// Only keep valid http(s) URLs
-    #[arg(long, help_heading = "Download")]
-    pub valid: bool,
-
     /// Only queue every URL once
     #[arg(short = 'u', long, help_heading = "Download")]
     pub unique: bool,
@@ -84,21 +82,30 @@ pub struct Cli {
 
     /// Hash the files already in --dir (and in subdirectories with -R) before downloading
     ///
-    /// The hashes feed --nodupes; with --live-csv they are also written to the CSV
-    /// (blank url, is_dupe=0).
+    /// The hashes feed --nodupes; with --db the files are also added to the database
+    /// (status 'existing', no url).
     #[arg(short = 'H', long, help_heading = "Download")]
     pub hash_existing: bool,
 
-    /// Workspace/state file (CSV: type,url,name,hash,is_dupe), updated live after every file/page
+    /// SQLite database that remembers the crawl: pages, files and how they are connected
     ///
-    /// type is media (a downloaded file; name = file name relative to --dir) or page (a crawled
-    /// page; name = its title; hash = sha256 of its HTML). If the file exists it is loaded first
-    /// and only ever appended to. URLs already in it are skipped and its hashes are used by
-    /// --nodupes, so re-running an interrupted command continues where it stopped. is_dupe=1
-    /// means the content was already seen (media: the new file was deleted; page: same HTML as
-    /// an earlier page, not scanned again).
-    #[arg(short = 'L', long, value_name = "FILE.csv", help_heading = "Download")]
-    pub live_csv: Option<PathBuf>,
+    /// One single file (created if missing, only ever added to), updated live after every page
+    /// and file. Tables: pages (url, title, http status, html hash ...), media (url, saved path,
+    /// mime type, size, sha256, status ...), links (page -> page), page_media (page -> file),
+    /// redirects (page -> page); views v_page_media, v_links, v_edges ... make it easy to read.
+    /// URLs it already holds are skipped and its hashes feed --nodupes, so re-running an
+    /// interrupted command continues where it stopped (failed ones are retried).
+    /// Open it with any SQLite tool (DB Browser for SQLite, Datasette, the sqlite3 CLI) or draw it
+    /// with --graph.
+    #[arg(long, value_name = "FILE.db", help_heading = "Download")]
+    pub db: Option<PathBuf>,
+
+    /// Write an interactive graph (one standalone .html file) of the --db: which page links to which
+    /// page, which files each page has, redirects, duplicates
+    ///
+    /// Runs after the download, or on its own: webgrab --db crawl.db --graph crawl.html
+    #[arg(long, value_name = "FILE.html", help_heading = "Download")]
+    pub graph: Option<PathBuf>,
 
     /// If the file exists, replace it (default: save as "name [1].ext")
     ///
@@ -111,7 +118,7 @@ pub struct Cli {
     ///
     /// Only the file name is checked, not the content. If two different links point to
     /// different files that happen to share a name, --skip (and --replace) can be
-    /// problematic: the second one is skipped/overwritten. Use --nodupes with --live-csv
+    /// problematic: the second one is skipped/overwritten. Use --nodupes with --db
     /// to track real content. Add -R to also look in subdirectories.
     #[arg(short = 's', long, help_heading = "Download")]
     pub skip: bool,
@@ -120,39 +127,52 @@ pub struct Cli {
     #[arg(short = 'b', long, value_name = "URL", help_heading = "Download")]
     pub base: Option<String>,
 
+    /// Seconds without data before a request is abandoned
+    #[arg(long, default_value_t = 60, value_name = "SECS", help_heading = "Download")]
+    pub timeout: u64,
+
+    // ---------------------------------------------------------------- crawl
     /// How deep to crawl: 0 = only the given page, 1 = also the pages it links to, 2 = and theirs ...
     ///
     /// Links are split into pages (crawled: <a href>, frames) and files (downloaded: everything
     /// else that passes your filters). Pages are followed only on the same host unless
-    /// --external is given, each page once. Use --unique so a file shown on many pages is
-    /// downloaded once. --ignore also applies to pages (e.g. --ignore logout). Pages are not
-    /// saved unless you add --codec. Applies to a page URL / .html file, not to --read.
-    #[arg(short = 'D', long, default_value_t = 0, value_name = "NUM", help_heading = "Download")]
+    /// --external is given, each page once, and only if they pass the --crawl-any/--crawl-must/
+    /// --crawl-ignore filters. Use --unique so a file shown on many pages is downloaded once.
+    /// Pages are not saved unless you add --codec. Applies to a page URL / .html file, not --read.
+    #[arg(short = 'D', long, default_value_t = 0, value_name = "NUM", help_heading = "Crawl")]
     pub crawl_depth: usize,
 
-    /// With --crawl-depth: wait this many milliseconds before every page request (avoids HTTP 429)
-    #[arg(long, default_value_t = 0, value_name = "MS", help_heading = "Download")]
+    /// Only follow pages whose URL contains ANY of these (comma separated, repeatable)
+    #[arg(long, value_delimiter = ',', value_name = "KEYWORD", help_heading = "Crawl")]
+    pub crawl_any: Vec<String>,
+
+    /// Only follow pages whose URL contains ALL of these
+    #[arg(long, value_delimiter = ',', value_name = "KEYWORD", help_heading = "Crawl")]
+    pub crawl_must: Vec<String>,
+
+    /// Never follow pages whose URL contains any of these (e.g. --crawl-ignore logout,login)
+    #[arg(long, value_delimiter = ',', value_name = "KEYWORD", help_heading = "Crawl")]
+    pub crawl_ignore: Vec<String>,
+
+    /// Wait this many milliseconds before every page request (avoids HTTP 429)
+    #[arg(long, default_value_t = 0, value_name = "MS", help_heading = "Crawl")]
     pub crawl_sleep: u64,
 
-    /// With --crawl-depth: when a page answers HTTP 429, wait and try again
+    /// When a page answers HTTP 429, wait and try again
     ///
     /// The wait doubles every time (1s, 2s, 4s ... max 60s), a Retry-After header from the
     /// server is respected if it asks for longer, and a random offset is added to every wait
     /// so the timing is never exactly the same.
-    #[arg(long, help_heading = "Download")]
+    #[arg(long, help_heading = "Crawl")]
     pub crawl_retry_429: bool,
 
     /// With --crawl-retry-429: how many times to retry one page before giving up
-    #[arg(long, default_value_t = 6, value_name = "NUM", help_heading = "Download")]
+    #[arg(long, default_value_t = 6, value_name = "NUM", help_heading = "Crawl")]
     pub crawl_retries: u32,
 
-    /// With --crawl-depth: also follow links to other hosts (default: stay on the start page's host)
-    #[arg(long, help_heading = "Download")]
+    /// Also follow links to other hosts (default: stay on the start page's host)
+    #[arg(long, help_heading = "Crawl")]
     pub external: bool,
-
-    /// Seconds without data before a request is abandoned
-    #[arg(long, default_value_t = 60, value_name = "SECS", help_heading = "Download")]
-    pub timeout: u64,
 
     // ---------------------------------------------------------- user agent
     /// Send "User-Agent: webgrab"
@@ -175,15 +195,15 @@ pub struct Cli {
     pub user_agent: Option<String>,
 
     // -------------------------------------------------------------- filters
-    /// Keep only links containing ANY of these (comma separated, repeatable)
+    /// Keep only files whose URL contains ANY of these (comma separated, repeatable)
     #[arg(short = 'a', long, value_delimiter = ',', value_name = "KEYWORD", help_heading = "Filters")]
     pub any: Vec<String>,
 
-    /// Keep only links containing ALL of these
+    /// Keep only files whose URL contains ALL of these
     #[arg(short = 'm', long, value_delimiter = ',', value_name = "KEYWORD", help_heading = "Filters")]
     pub must: Vec<String>,
 
-    /// Drop links containing any of these
+    /// Drop files whose URL contains any of these
     #[arg(short = 'i', long, value_delimiter = ',', value_name = "KEYWORD", help_heading = "Filters")]
     pub ignore: Vec<String>,
 
@@ -202,9 +222,6 @@ pub struct Cli {
     /// Page/code extensions (.html .css .js .php ...)
     #[arg(long, help_heading = "Filters")]
     pub codec: bool,
-    /// --clean --color --count --valid --media --ignore thumb
-    #[arg(long, help_heading = "Filters")]
-    pub grab: bool,
 
     // -------------------------------------------------------------- display
     /// Only print numbers (on a single line)
@@ -213,34 +230,20 @@ pub struct Cli {
     /// Don't print errors/warnings (only successful downloads)
     #[arg(short = 'q', long, help_heading = "Display")]
     pub clean: bool,
-    /// Number the output
-    #[arg(short = 'c', long, help_heading = "Display")]
-    pub count: bool,
-    /// More detail (--count, DING lines, table output with --list, debug block at the end)
+    /// More detail (DING lines, table output with --list, debug block at the end)
     #[arg(short = 'v', long, help_heading = "Display")]
     pub verbose: bool,
     /// With --list: print only the file names
     #[arg(short = 'f', long, help_heading = "Display")]
     pub filename: bool,
-    /// Use colors
+    /// No colors (they are on by default, except when the output goes to a file or pipe; NO_COLOR works too)
     #[arg(long, help_heading = "Display")]
-    pub color: bool,
+    pub nocolor: bool,
 }
 
 impl Cli {
-    /// Expand the presets (--grab, --media, ...) into the plain options.
+    /// Expand the presets (--media, ...) into the plain options.
     pub fn resolve(&mut self) {
-        if self.verbose {
-            self.count = true;
-        }
-        if self.grab {
-            self.clean = true;
-            self.color = true;
-            self.count = true;
-            self.valid = true;
-            self.media = true;
-            self.ignore.push("thumb".into());
-        }
         let mut add = |list: &[&str]| self.any.extend(list.iter().map(|s| s.to_string()));
         let (media, video, image, other, codec) =
             (self.media, self.video, self.image, self.other, self.codec);
@@ -259,6 +262,9 @@ impl Cli {
         self.any.retain(|s| !s.is_empty());
         self.must.retain(|s| !s.is_empty());
         self.ignore.retain(|s| !s.is_empty());
+        self.crawl_any.retain(|s| !s.is_empty());
+        self.crawl_must.retain(|s| !s.is_empty());
+        self.crawl_ignore.retain(|s| !s.is_empty());
         self.threads = self.threads.clamp(1, 256);
     }
 }

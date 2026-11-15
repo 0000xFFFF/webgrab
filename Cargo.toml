@@ -5,11 +5,12 @@ edition = "2024"
 description = "Web page file scanner / downloader"
 
 [dependencies]
-csv = "1"
 clap = { version = "4", features = ["derive"] }
 html-escape = "0.2"
 percent-encoding = "2"
 regex = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde_json = "1"
 sha2 = "0.10"
 ureq = "2"
 url = "2"

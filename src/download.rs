@@ -1,7 +1,6 @@
 use crate::cli::Cli;
-use crate::csvlog::CsvLog;
-use crate::csvlog::{MEDIA, PAGE};
-use crate::filter::{Filters, Hint};
+use crate::db::{Db, PageRec};
+use crate::filter::{media_kind, Filters, Hint, Keywords};
 use crate::skip::Skipper;
 use crate::stats::Stats;
 use crate::ua;
@@ -35,6 +34,8 @@ pub struct Ctx<'a> {
     pub ui: &'a Printer,
     pub stats: &'a Stats,
     pub filters: Filters,
+    /// --crawl-any/--crawl-must/--crawl-ignore: which pages may be followed
+    pub crawl_filters: Keywords,
     pub skipper: Skipper,
     agent: ureq::Agent,
     headers: Vec<(String, String)>,
@@ -43,8 +44,8 @@ pub struct Ctx<'a> {
     reserved: Mutex<HashSet<String>>,
     /// sha256 -> file name of the first file with that content
     hashes: Mutex<HashMap<String, String>>,
-    /// --live-csv workspace
-    csv: Option<CsvLog>,
+    /// --db: pages, files and how they are connected
+    db: Option<Db>,
 }
 
 fn hex_of_file(path: &Path) -> io::Result<String> {
@@ -109,26 +110,23 @@ impl<'a> Ctx<'a> {
             .timeout_read(Duration::from_secs(cli.timeout.max(1)))
             .build();
 
-        let csv = match (&cli.live_csv, downloading) {
-            (Some(p), true) => Some(CsvLog::open(p)?),
+        let db = match (&cli.db, downloading) {
+            (Some(p), true) => Some(Db::open(p)?),
             _ => None,
         };
 
         let mut hashes = HashMap::new();
-        if let Some(c) = &csv {
-            for (h, name) in c.loaded_hashes() {
-                hashes.entry(h.clone()).or_insert_with(|| name.clone());
-            }
-            if c.migrated {
-                ui.say(K::War, "WAR[live-csv] old 4-column csv converted to type,url,name,hash,is_dupe (copy kept as .legacy.bak)");
+        if let Some(d) = &db {
+            for (h, path) in d.file_hashes() {
+                hashes.entry(h).or_insert(path);
             }
             ui.say(
                 K::Inf,
                 &format!(
-                    "loaded {} row(s) from {}{}",
-                    c.loaded_rows,
-                    cli.live_csv.as_ref().unwrap().display(),
-                    if c.bad_rows > 0 { format!(" ({} unreadable row(s) ignored)", c.bad_rows) } else { String::new() }
+                    "db: {} ({} page(s), {} file(s) already recorded)",
+                    cli.db.as_ref().unwrap().display(),
+                    d.pages_loaded,
+                    d.media_loaded
                 ),
             );
         }
@@ -138,13 +136,14 @@ impl<'a> Ctx<'a> {
             ui,
             stats,
             filters: Filters::new(cli),
+            crawl_filters: Keywords::new(&cli.crawl_any, &cli.crawl_must, &cli.crawl_ignore),
             skipper: Skipper::new(cli, &dir),
             agent,
             headers: ua::headers(cli),
             dir,
             reserved: Mutex::new(HashSet::new()),
             hashes: Mutex::new(hashes),
-            csv,
+            db,
         };
 
         if cli.hash_existing && downloading {
@@ -163,10 +162,22 @@ impl<'a> Ctx<'a> {
     }
 
     /// --hash-existing: hash the files already in --dir (and below with -R).
-    /// Files already recorded in the CSV are not hashed again; new ones are added to it
-    /// with a blank url and is_dupe=0.
+    /// Files already in the db are not hashed again; new ones are added to it (status 'existing', no url).
     fn seed_hashes(&self) {
-        let csv_path = self.cli.live_csv.as_ref().and_then(|p| p.canonicalize().ok());
+        // the database itself (and its write-ahead log) is not a file to hash
+        let skip: Vec<PathBuf> = self
+            .cli
+            .db
+            .iter()
+            .flat_map(|p| {
+                ["", "-wal", "-shm", "-journal"].map(|suf| {
+                    let mut o = p.as_os_str().to_owned();
+                    o.push(suf);
+                    let pb = PathBuf::from(o);
+                    pb.canonicalize().unwrap_or(pb)
+                })
+            })
+            .collect();
         let (mut hashed, mut known) = (0usize, 0usize);
 
         for p in walk_files(&self.dir, self.cli.recursive) {
@@ -174,29 +185,28 @@ impl<'a> Ctx<'a> {
             if rel.ends_with(".webgrab_download") {
                 continue;
             }
-            if let (Some(c), Ok(me)) = (&csv_path, p.canonicalize()) {
-                if *c == me {
-                    continue; // the workspace file itself
-                }
+            if p.canonicalize().map_or(false, |me| skip.contains(&me)) {
+                continue;
             }
-            if let Some(c) = &self.csv {
-                if c.has_loaded_name(&rel) {
+            if let Some(d) = &self.db {
+                if d.has_file_path(&rel) {
                     known += 1;
                     continue;
                 }
             }
             let Ok(h) = hex_of_file(&p) else { continue };
             self.hashes.lock().unwrap_or_else(|e| e.into_inner()).entry(h.clone()).or_insert_with(|| rel.clone());
-            if let Some(c) = &self.csv {
-                if let Err(e) = c.write_row(MEDIA, "", &rel, &h, false) {
-                    self.note(K::Err, &format!("ERR[live-csv] {}", e));
+            if let Some(d) = &self.db {
+                let size = fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                if let Err(e) = d.media_existing(&rel, media_kind(&rel, None), size, &h) {
+                    self.note(K::Err, &format!("ERR[db] {}", e));
                 }
             }
             hashed += 1;
         }
         self.ui.say(
             K::Inf,
-            &format!("hash-existing: hashed {} file(s), {} already in csv ({})", hashed, known, self.dir.display()),
+            &format!("hash-existing: hashed {} file(s), {} already in the db ({})", hashed, known, self.dir.display()),
         );
     }
 
@@ -217,43 +227,58 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    fn log_row(&self, url: &str, name: &str, hash: &str, dupe: bool) {
-        if let Some(c) = &self.csv {
-            if let Err(e) = c.write_row(MEDIA, url, name, hash, dupe) {
-                self.note(K::Err, &format!("ERR[live-csv] {}", e));
-            }
+    // ------------------------------------------------------------ database (--db)
+
+    fn db_err(&self, r: Result<(), String>) {
+        if let Err(e) = r {
+            self.note(K::Err, &format!("ERR[db] {}", e));
         }
     }
 
-    // ---- crawled pages in the --live-csv workspace
-
-    /// Is the page already in the CSV?
+    /// Is the page already in the db as completely read?
     pub fn page_seen(&self, url: &str) -> bool {
-        self.csv.as_ref().map_or(false, |c| c.has_page(url))
+        self.db.as_ref().map_or(false, |d| d.page_seen(url))
     }
 
-    /// Is the CSV hashing pages?
+    /// Is there a db (pages are hashed and recorded only then)?
     pub fn tracks_pages(&self) -> bool {
-        self.csv.is_some()
+        self.db.is_some()
     }
 
     /// URL of an earlier page with exactly this content.
     pub fn page_hash_owner(&self, hash: &str) -> Option<String> {
-        self.csv.as_ref().and_then(|c| c.page_hash_owner(hash))
+        self.db.as_ref().and_then(|d| d.page_hash_owner(hash))
     }
 
-    /// Add a crawled page: name = its title (or the last part of its URL if it has none).
-    pub fn log_page(&self, url: &str, title: &str, hash: &str, dupe: bool) {
-        let Some(c) = &self.csv else { return };
-        let name = if !title.is_empty() {
-            title.to_string()
-        } else {
-            file_name_from_url(url)
-                .or_else(|| url::Url::parse(url).ok().and_then(|u| u.host_str().map(String::from)))
-                .unwrap_or_else(|| url.to_string())
-        };
-        if let Err(e) = c.write_row(PAGE, url, &name, hash, dupe) {
-            self.note(K::Err, &format!("ERR[live-csv] {}", e));
+    pub fn db_page_done(&self, rec: &PageRec) {
+        if let Some(d) = &self.db {
+            self.db_err(d.page_done(rec));
+        }
+    }
+
+    pub fn db_page_failed(&self, url: &str, status: Option<u16>, error: &str) {
+        if let Some(d) = &self.db {
+            self.db_err(d.page_failed(url, status, error));
+        }
+    }
+
+    pub fn db_redirect(&self, from: &str, to: &str) {
+        if let Some(d) = &self.db {
+            self.db_err(d.redirect(from, to));
+        }
+    }
+
+    pub fn db_link_pages(&self, page: &str, to: &[String]) {
+        if let Some(d) = &self.db {
+            self.db_err(d.link_pages(page, to));
+        }
+    }
+
+    pub fn db_link_media(&self, page: &str, media: &[(String, Option<Hint>)]) {
+        if let Some(d) = &self.db {
+            let items: Vec<(String, &'static str)> =
+                media.iter().map(|(u, h)| (u.clone(), media_kind(u, *h))).collect();
+            self.db_err(d.link_media(page, &items));
         }
     }
 
@@ -289,9 +314,12 @@ impl<'a> Ctx<'a> {
         self.reserved.lock().unwrap_or_else(|e| e.into_inner()).remove(name);
     }
 
-    fn fail(&self, url: &str, name: Option<&str>, msg: &str) -> Result<Outcome, String> {
+    fn fail(&self, url: &str, name: Option<&str>, status: Option<u16>, msg: &str) -> Result<Outcome, String> {
         if let Some(n) = name {
             self.release(n);
+        }
+        if let Some(d) = &self.db {
+            self.db_err(d.media_failed(url, media_kind(url, None), status, msg));
         }
         self.stats.failed.fetch_add(1, Relaxed);
         self.note(K::Err, &format!("ERR[{}] {}", msg, url));
@@ -325,15 +353,17 @@ impl<'a> Ctx<'a> {
         let cli = self.cli;
 
         let name = file_name_from_url(url).unwrap_or_else(|| format!("download_{}", n));
+        let total = self.stats.queued.load(Relaxed).max(n);
+        let w = total.to_string().len();
         if cli.verbose {
-            self.ui.say(K::Cur, &format!("DING[{}]: {} ({})", n, url, name));
+            self.ui.say(K::Cur, &format!("DING[{:>w$}/{}]: {} ({})", n, total, url, name));
         }
 
-        // resume: this URL is already in the --live-csv workspace
-        if let Some(c) = &self.csv {
-            if c.has_media_url(url) {
+        // resume: the db already has this file (saved, or deleted as a duplicate)
+        if let Some(d) = &self.db {
+            if d.media_done(url) {
                 self.stats.skipped.fetch_add(1, Relaxed);
-                self.note(K::War, &format!("WAR[SKIPPED] {} (already in csv)", url));
+                self.note(K::War, &format!("WAR[SKIPPED] {} (already in the db)", url));
                 return Ok(Outcome::Skipped);
             }
         }
@@ -347,9 +377,15 @@ impl<'a> Ctx<'a> {
 
         let resp = match self.get(url).call() {
             Ok(r) => r,
-            Err(ureq::Error::Status(code, _)) => return self.fail(url, None, &format!("HTTP {}", code)),
-            Err(e) => return self.fail(url, None, &e.to_string()),
+            Err(ureq::Error::Status(code, _)) => return self.fail(url, None, Some(code), &format!("HTTP {}", code)),
+            Err(e) => return self.fail(url, None, None, &e.to_string()),
         };
+        let http = resp.status();
+        let mime: Option<String> = resp
+            .header("content-type")
+            .map(|c| c.split(';').next().unwrap_or("").trim().to_lowercase())
+            .filter(|c| !c.is_empty());
+        let kind = media_kind(url, None);
 
         // URL without an extension (".../image?id=5"): take it from the Content-Type
         let name = match resp.header("content-type").and_then(ext_for_mime) {
@@ -361,12 +397,12 @@ impl<'a> Ctx<'a> {
         let final_path = self.dir.join(&final_name);
         let tmp = self.dir.join(format!("{}.webgrab_download", final_name));
 
-        let want_hash = cli.nodupes || self.csv.is_some();
+        let want_hash = cli.nodupes || self.db.is_some();
         let (size, hash) = match self.stream(resp.into_reader(), &tmp, want_hash) {
             Ok(v) => v,
             Err(e) => {
                 let _ = fs::remove_file(&tmp);
-                return self.fail(url, Some(&final_name), &format!("IO {}", e));
+                return self.fail(url, Some(&final_name), None, &format!("IO {}", e));
             }
         };
 
@@ -387,7 +423,9 @@ impl<'a> Ctx<'a> {
                     let _ = fs::remove_file(&tmp);
                     self.release(&final_name);
                     self.stats.hash_dupes.fetch_add(1, Relaxed);
-                    self.log_row(url, &final_name, h, true);
+                    if let Some(d) = &self.db {
+                        self.db_err(d.media_duplicate(url, kind, mime.as_deref(), size, h, http));
+                    }
                     self.note(K::War, &format!("WAR[DUPLICATE] {} (same content as {}) deleted", url, orig));
                     return Ok(Outcome::HashDupe);
                 }
@@ -399,7 +437,7 @@ impl<'a> Ctx<'a> {
             if let (true, Some(h)) = (cli.nodupes, &hash) {
                 self.hashes.lock().unwrap_or_else(|e| e.into_inner()).remove(h);
             }
-            return self.fail(url, Some(&final_name), &format!("IO {}", e));
+            return self.fail(url, Some(&final_name), None, &format!("IO {}", e));
         }
         if self.skipper.active() {
             self.skipper.add(&final_name);
@@ -417,9 +455,9 @@ impl<'a> Ctx<'a> {
         let d = self.stats.dled.fetch_add(1, Relaxed) + 1;
         self.stats.bytes.fetch_add(size, Relaxed);
 
-        // live workspace: written + synced after every file
-        if let Some(h) = &hash {
-            self.log_row(url, &final_name, h, false);
+        // live database: written after every file
+        if let Some(d) = &self.db {
+            self.db_err(d.media_downloaded(url, kind, &final_name, mime.as_deref(), size, hash.as_deref(), http));
         }
 
         let tag = match clash {
@@ -427,10 +465,11 @@ impl<'a> Ctx<'a> {
             Clash::Replaced => " WAR[REPLACED]",
             Clash::None => "",
         };
-        let idx = if cli.count { format!("[{}]", d) } else { String::new() };
+        let total = self.stats.queued.load(Relaxed).max(d);
+        let w = total.to_string().len();
         self.ui.say(
             K::Pri,
-            &format!("DLED{}: {} ({}) ({} ({} bytes)){}", idx, url, final_name, human(size as f64), size, tag),
+            &format!("DLED[{:>w$}/{}]: {} ({}) ({} ({} bytes)){}", d, total, url, final_name, human(size as f64), size, tag),
         );
         Ok(Outcome::Downloaded)
     }

@@ -57,47 +57,76 @@ pub enum Hint {
     Video,
 }
 
-/// Keyword rules, case-insensitive substring matching (same semantics as the C# version):
-///   any    = at least one must be present
+/// Kind of file a link is, for the database: from its element, else from its extension.
+pub fn media_kind(link: &str, hint: Option<Hint>) -> &'static str {
+    match hint {
+        Some(Hint::Image) => "image",
+        Some(Hint::Video) => "video",
+        None => match crate::util::url_ext(link) {
+            Some(e) if TYPES_IMAGE.contains(&e.as_str()) => "image",
+            Some(e) if TYPES_VIDEO.contains(&e.as_str()) => "video",
+            _ => "file",
+        },
+    }
+}
+
+/// Keyword rules, case-insensitive substring matching:
+///   any    = at least one must be present (if there are any)
 ///   must   = all must be present
 ///   ignore = none may be present
-pub struct Filters {
-    only: Vec<String>,
+pub struct Keywords {
+    any: Vec<String>,
     must: Vec<String>,
     ignore: Vec<String>,
-    valid: bool,
+}
+
+impl Keywords {
+    pub fn new(any: &[String], must: &[String], ignore: &[String]) -> Self {
+        let lc = |v: &[String]| v.iter().map(|s| s.to_lowercase()).collect::<Vec<_>>();
+        Self { any: lc(any), must: lc(must), ignore: lc(ignore) }
+    }
+
+    fn any_ok(&self, l: &str) -> bool {
+        self.any.is_empty() || self.any.iter().any(|k| l.contains(k.as_str()))
+    }
+
+    fn must_ok(&self, l: &str) -> bool {
+        self.must.iter().all(|k| l.contains(k.as_str()))
+    }
+
+    fn ignore_ok(&self, l: &str) -> bool {
+        !self.ignore.iter().any(|k| l.contains(k.as_str()))
+    }
+
+    pub fn passes(&self, link: &str) -> bool {
+        let l = link.to_lowercase();
+        self.any_ok(&l) && self.must_ok(&l) && self.ignore_ok(&l)
+    }
+}
+
+/// Rules for FILES (--any/--must/--ignore + --image/--video/--media/--other/--codec).
+/// A link must always be a valid http(s) URL.
+pub struct Filters {
+    kw: Keywords,
     hint_image: bool,
     hint_video: bool,
 }
 
 impl Filters {
     pub fn new(cli: &Cli) -> Self {
-        let lc = |v: &Vec<String>| v.iter().map(|s| s.to_lowercase()).collect::<Vec<_>>();
         Self {
-            only: lc(&cli.any),
-            must: lc(&cli.must),
-            ignore: lc(&cli.ignore),
-            valid: cli.valid,
+            kw: Keywords::new(&cli.any, &cli.must, &cli.ignore),
             hint_image: cli.media || cli.image,
             hint_video: cli.media || cli.video,
         }
     }
 
-    /// --ignore keywords only (also applied to links the crawler would follow).
-    pub fn ignored(&self, link: &str) -> bool {
-        let l = link.to_lowercase();
-        self.ignore.iter().any(|k| l.contains(k.as_str()))
-    }
-
     pub fn passes(&self, link: &str, hint: Option<Hint>) -> bool {
-        if link.is_empty() {
-            return false;
-        }
-        if self.valid && !is_http(link) {
+        if !is_http(link) {
             return false;
         }
         let l = link.to_lowercase();
-        if !self.only.is_empty() && !self.only.iter().any(|k| l.contains(k.as_str())) {
+        if !self.kw.any_ok(&l) {
             // no extension/keyword match: still accepted if the element says it's wanted media
             let by_hint = match hint {
                 Some(Hint::Image) => self.hint_image,
@@ -108,12 +137,6 @@ impl Filters {
                 return false;
             }
         }
-        if !self.must.iter().all(|k| l.contains(k.as_str())) {
-            return false;
-        }
-        if self.ignore.iter().any(|k| l.contains(k.as_str())) {
-            return false;
-        }
-        true
+        self.kw.must_ok(&l) && self.kw.ignore_ok(&l)
     }
 }

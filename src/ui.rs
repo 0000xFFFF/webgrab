@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::sync::Mutex;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -16,14 +16,28 @@ pub enum K {
 
 /// Thread-safe console printer (one line at a time, optional ANSI colors).
 pub struct Printer {
-    color: bool,
+    color_out: bool,
+    color_err: bool,
     compact: bool,
     lock: Mutex<()>,
 }
 
+/// Is stdout a terminal (not a pipe / file)?
+pub fn stdout_is_tty() -> bool {
+    std::io::stdout().is_terminal()
+}
+
 impl Printer {
-    pub fn new(color: bool, compact: bool) -> Self {
-        Self { color, compact, lock: Mutex::new(()) }
+    /// Colors are on by default; --nocolor and the NO_COLOR variable turn them off, and so does
+    /// redirecting the output to a file or a pipe (so logs don't fill up with escape codes).
+    pub fn new(nocolor: bool, compact: bool) -> Self {
+        let off = nocolor || std::env::var_os("NO_COLOR").map_or(false, |v| !v.is_empty());
+        Self {
+            color_out: !off && std::io::stdout().is_terminal(),
+            color_err: !off && std::io::stderr().is_terminal(),
+            compact,
+            lock: Mutex::new(()),
+        }
     }
 
     fn code(k: K) -> &'static str {
@@ -49,7 +63,8 @@ impl Printer {
     /// Message that ignores --compact.
     pub fn always(&self, k: K, text: &str) {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        let line = if self.color {
+        let color = if matches!(k, K::Err | K::Cer) { self.color_err } else { self.color_out };
+        let line = if color {
             format!("{}{}\x1b[0m", Self::code(k), text)
         } else {
             text.to_string()

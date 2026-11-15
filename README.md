@@ -4,7 +4,7 @@ Web page file scanner / downloader.
 
 Build: `cargo build --release` -> `target/release/webgrab` (`webgrab.exe` on Windows)
 
-Flags work with two dashes or one (`--threads 4` = `-threads 4`), hyphens or underscores (`--live-csv` = `--live_csv`).
+Flags work with two dashes or one (`--threads 4` = `-threads 4`), hyphens or underscores (`--crawl-depth` = `--crawl_depth`).
 Short flags (`-t 4`, `-d out`, `-R`) take their value after a space and can't be combined.
 
 ```
@@ -28,20 +28,27 @@ webgrab -w [flags]
 | | `--crawl-retry-429` | on HTTP 429 retry the page with exponential backoff + random offset |
 | | `--crawl-retries N` | max retries per page for `--crawl-retry-429` (default 6) |
 | | `--external` | with `--crawl-depth`: also follow links to other hosts |
+| | `--crawl-any a,b` | only follow pages whose URL contains ANY of these |
+| | `--crawl-must a,b` | only follow pages whose URL contains ALL of these |
+| | `--crawl-ignore a,b` | never follow pages whose URL contains any of these |
 | `-u` | `--unique` | queue every URL once |
 | `-n` | `--nodupes` | hash each download; same content already saved -> delete the new file |
 | `-H` | `--hash-existing` | hash files already in `--dir` first |
-| `-L FILE` | `--live-csv FILE` | workspace/state file (below) |
+| | `--db FILE.db` | SQLite file that remembers pages, files and how they connect; also the resume state (below) |
+| | `--graph FILE.html` | write an interactive graph of the `--db` (alone, or after a crawl) |
 | `-s` | `--skip` | skip if a file with the same **name** exists |
 | `-p` | `--replace` | overwrite same-name files (default: `name [1].ext`) |
 | `-b URL` | `--base URL` | resolve relative links in a local .html |
-| | `--valid` | http(s) only |
 | | `--timeout SECS` | |
-| `-a` | `--any a,b` | link must contain ANY of these |
-| `-m` | `--must a,b` | link must contain ALL of these |
-| `-i` | `--ignore a,b` | link must contain NONE of these |
-| `-M` | `--media` | + `--video --image --other --codec --grab` |
-| `-q` `-c` `-v` `-f` | `--clean --count --verbose --filename` | + `--compact --color` |
+| `-a` | `--any a,b` | file link must contain ANY of these |
+| `-m` | `--must a,b` | file link must contain ALL of these |
+| `-i` | `--ignore a,b` | file link must contain NONE of these |
+| `-M` | `--media` | + `--video --image --other --codec` |
+| `-q` `-v` `-f` | `--clean --verbose --filename` | + `--compact`; `--nocolor` turns colors off |
+
+Defaults: colors are on (off when output goes to a file/pipe, with `--nocolor`, or when `NO_COLOR` is set);
+downloads are counted as `DLED[done/total]` (and `DING[started/total]` with `--verbose`); every link must be
+http(s). `--list` numbers links (`[1] url`) only on a terminal; piped output is one bare URL per line.
 
 User-Agent: `--agent` (`webgrab`), `--agent-firefox`, `--agent-chromium`, `--agent-chrome`, `--agent-brave`
 (the Chromium-family ones also send matching `Sec-CH-UA*` client hints), `--user-agent STRING` (wins).
@@ -60,33 +67,44 @@ Links on a page are split into **pages** and **files**:
 `--crawl-depth 0` scans only the page you gave (as before), `--crawl-depth 1` also scans the pages it links to,
 `--crawl-depth 2` the pages those link to, and so on. Each page is visited once, only on the start page's host
 (`www.` ignored) unless `--external`; files are downloaded from any host. Files are downloaded as soon as a
-page is scanned. `--ignore logout` also keeps the crawler away from matching pages; pages are only saved
-with `--codec`. Use `--unique` so a file shown on many pages is fetched once. `--list --crawl-depth N` prints the
+page is scanned. Which pages are followed is decided by `--crawl-any/--crawl-must/--crawl-ignore` (`--ignore`
+only concerns files); pages themselves are only saved with `--codec`. Use `--unique` so a file shown on many pages is fetched once. `--list --crawl-depth N` prints the
 files found while crawling (progress goes to stderr); for a local .html file add `--base`.
 **Rate limits:** `--crawl-sleep 1500` waits 1.5 s before every page request. `--crawl-retry-429` handles a
 server that answers HTTP 429 anyway: the page is retried after 1 s, 2 s, 4 s ... (max 60 s; a longer
 `Retry-After` from the server wins), each wait plus a random offset (up to 20% + 250 ms) so it isn't a fixed
 rhythm. After `--crawl-retries` failed tries the page is counted as failed and the crawl moves on. These
 apply to page requests only; file downloads are not throttled.
-Resuming a crawl: with `--live-csv` every crawled page is logged once its files are done. On a re-run,
-pages at the last depth that are already logged are skipped; logged pages *above* it are read again
-only to find the pages below them (their files are skipped, nothing is logged twice), otherwise an
-interrupted crawl could never continue. Pages that failed (e.g. 429) aren't logged and are retried.
-Raising `--crawl-depth` between runs works the same way.
+Resuming a crawl: with `--db` every crawled page is recorded once its files are done. On a re-run,
+pages at the last depth that are already in the db are skipped; recorded pages *above* it are read again
+only to find the pages below them (their files are skipped), otherwise an interrupted crawl could never
+continue. Pages that failed (e.g. 429) are recorded as failed and retried. Raising `--crawl-depth`
+between runs works the same way.
 
 ## Skip / resume
 - `--unique` same URL once. `--nodupes` same content once. `--skip` same file *name* (only the name!
   Two different links with the same file name confuse `--skip` and `--replace`).
-- `--live-csv data.csv` columns: `type,url,name,hash,is_dupe`. Loaded at start, only appended to, each row
-  flushed to disk immediately. Fields with commas/quotes are quoted like Python's `csv`.
-  - `type=media`: a downloaded file. `name` is relative to `--dir`, `hash` = sha256 of the file,
-    `is_dupe=1` = deleted duplicate, blank `url` = came from `--hash-existing`.
-  - `type=page`: a crawled page. `name` = the page's title, `hash` = sha256 of its HTML,
-    `is_dupe=1` = same HTML as an earlier page (not scanned again).
-  - An old 4-column file (`url,filename,hash,is_dupe`) is converted on first use (copy kept as
-    `<file>.legacy.bak`).
-- Re-running an interrupted `webgrab --live-csv data.csv --nodupes --unique links.html` skips every URL
-  already in the CSV (downloaded or deleted as duplicate) and uses its hashes for `--nodupes`.
-  Failed downloads aren't logged, so they are retried.
+- `--db crawl.db` is a single SQLite file (WAL while running, one file after a clean finish). It is loaded at
+  start and updated as things happen, so an interrupted run loses nothing. Re-running
+  `webgrab --db crawl.db --nodupes --unique <url>` skips every URL already downloaded (or deleted as a
+  duplicate) and uses the stored hashes for `--nodupes`. Failed downloads are retried.
+  `--hash-existing` adds files already in `--dir` (status `existing`, no url). Old `--live-csv` files are not imported.
+
+## The database
+| table | one row per | main columns |
+|---|---|---|
+| `pages` | page URL (also pages only seen as a link: `crawled_at` is NULL) | `url`, `title`, `http_status`, `content_type`, `size`, `html_sha256`, `is_dupe`/`dupe_of`, `depth`, `error`, `discovered_at`, `crawled_at` |
+| `media` | file URL | `url`, `kind` (image/video/file), `status` (queued/downloaded/duplicate/failed/existing), `file_path`, `mime_type`, `size`, `sha256`, `dupe_of`, `http_status`, `error`, `downloaded_at` |
+| `links` | page -> page | `from_page`, `to_page` |
+| `page_media` | page -> file it shows | `page_id`, `media_id` (recorded even when `--unique` skipped the download) |
+| `redirects` | requested page -> final page | `from_page`, `to_page` |
+
+Views for easy browsing: `v_page_media` (which page has which file), `v_links`, `v_redirects`,
+`v_media_dupes`, `v_edges` (all relationships in one list). Open the file with any SQLite tool
+(DB Browser for SQLite, Datasette, `sqlite3`).
+
+**Graph:** `webgrab --db crawl.db --graph crawl.html` (or add `--graph` to a crawl) writes one standalone
+HTML file: pages and files as nodes, links / has-file / redirects as edges, with search, filters and a
+details panel on click. The page loads the vis-network library from a CDN, so it needs internet when opened.
 
 Exit code: 0 ok, 1 bad input / fatal, 2 some downloads failed.

@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>webgrab graph</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1d2330; --muted: #667085; --panel: #f4f6f9; --line: #d5dbe3;
+    --page: #3b82f6; --page-seen: #9aa7b8; --page-bad: #ef4444; --page-dupe: #a78bfa;
+    --image: #22c55e; --video: #f59e0b; --file: #14b8a6; --media-dupe: #9ca3af; --media-bad: #ef4444;
+    --e-link: #8793a6; --e-media: #22c55e; --e-redirect: #ef4444;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --fg: #e6e9ef; --muted: #98a2b3; --panel: #1b2029; --line: #313a47;
+      --page: #60a5fa; --page-seen: #6b7788; --e-link: #5d6879;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: flex; background: var(--bg); color: var(--fg);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #side { width: 320px; flex: none; padding: 14px; overflow: auto; background: var(--panel);
+          border-right: 1px solid var(--line); }
+  #net { flex: 1; min-width: 0; }
+  h1 { font-size: 16px; margin: 0 0 2px; }
+  .muted { color: var(--muted); font-size: 12.5px; }
+  input[type=search] { width: 100%; margin: 12px 0 8px; padding: 7px 9px; border-radius: 6px;
+        border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+  label { display: flex; align-items: center; gap: 7px; margin: 3px 0; cursor: pointer; }
+  fieldset { border: 0; padding: 0; margin: 10px 0 0; }
+  legend { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: 0; margin-bottom: 3px; }
+  .sw { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+  .sw.sq { border-radius: 2px; }
+  .sw.ln { width: 16px; height: 0; border-top: 2px solid; border-radius: 0; }
+  .sw.ln.dash { border-top-style: dashed; }
+  #detail { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); word-break: break-word; }
+  #detail h2 { font-size: 14px; margin: 0 0 6px; }
+  #detail dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; }
+  #detail dt { color: var(--muted); }
+  #detail dd { margin: 0; }
+  #detail a { color: var(--page); }
+  #detail ul { margin: 6px 0 0; padding-left: 18px; }
+  #detail li { cursor: pointer; margin: 2px 0; }
+  #detail li:hover { text-decoration: underline; }
+  button { padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
+  #msg { padding: 24px; }
+  @media (max-width: 700px) { body { flex-direction: column; } #side { width: 100%; max-height: 42vh; border-right: 0; border-bottom: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<aside id="side">
+  <h1>webgrab graph</h1>
+  <div class="muted" id="counts"></div>
+  <input type="search" id="q" placeholder="Search url, title, file name..." autocomplete="off">
+  <fieldset>
+    <legend>Show</legend>
+    <label><input type="checkbox" id="f-pages" checked><span class="sw" style="background:var(--page)"></span>Pages</label>
+    <label><input type="checkbox" id="f-seen" checked><span class="sw" style="background:var(--page-seen)"></span>Pages never read (only seen as links)</label>
+    <label><input type="checkbox" id="f-media" checked><span class="sw sq" style="background:var(--image)"></span>Files</label>
+    <label><input type="checkbox" id="f-mdupe" checked><span class="sw sq" style="background:var(--media-dupe)"></span>Duplicate / failed files</label>
+  </fieldset>
+  <fieldset>
+    <legend>Relationships</legend>
+    <label><input type="checkbox" id="e-0" checked><span class="sw ln" style="color:var(--e-link)"></span>page links to page</label>
+    <label><input type="checkbox" id="e-1" checked><span class="sw ln" style="color:var(--e-media)"></span>page has file</label>
+    <label><input type="checkbox" id="e-2" checked><span class="sw ln dash" style="color:var(--e-redirect)"></span>page redirects to page</label>
+  </fieldset>
+  <fieldset>
+    <legend>Legend</legend>
+    <div class="muted">
+      <span class="sw" style="background:var(--page);display:inline-block"></span> page &nbsp;
+      <span class="sw" style="background:var(--page-bad);display:inline-block"></span> failed &nbsp;
+      <span class="sw" style="background:var(--page-dupe);display:inline-block"></span> same html as another page<br>
+      <span class="sw sq" style="background:var(--image);display:inline-block"></span> image &nbsp;
+      <span class="sw sq" style="background:var(--video);display:inline-block"></span> video/audio &nbsp;
+      <span class="sw sq" style="background:var(--file);display:inline-block"></span> other file
+    </div>
+  </fieldset>
+  <p><button id="physics">Pause layout</button></p>
+  <div id="detail"><span class="muted">Click a node to see what it is connected to.</span></div>
+</aside>
+<div id="net"><div id="msg" class="muted">Loading graph viewer...</div></div>
+
+<script id="data" type="application/json">__GRAPH_DATA__</script>
+<script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<script>
+(function () {
+  "use strict";
+  var D = JSON.parse(document.getElementById("data").textContent);
+  var msg = document.getElementById("msg");
+  if (typeof vis === "undefined") {
+    msg.textContent = "The graph library (vis-network, from cdn.jsdelivr.net) could not be loaded. Open this file with an internet connection.";
+    return;
+  }
+  msg.remove();
+
+  function css(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  function short(s, n) { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+  function tail(u) {
+    try { var p = new URL(u).pathname.split("/").filter(Boolean); return p.length ? decodeURIComponent(p[p.length - 1]) : new URL(u).host; }
+    catch (e) { return u; }
+  }
+  function human(b) {
+    if (b == null) return "";
+    var u = ["B", "KB", "MB", "GB"], i = 0; b = Number(b);
+    while (b >= 1024 && i < 3) { b /= 1024; i++; }
+    return (i ? b.toFixed(1) : b) + " " + u[i];
+  }
+
+  var info = {};              // node id -> record
+  var nodes = [], edges = [];
+  var deg = {};
+  function bump(id) { deg[id] = (deg[id] || 0) + 1; }
+  D.edges.forEach(function (e) { bump("p" + e[0]); bump(e[2] === 1 ? "m" + e[1] : "p" + e[1]); });
+
+  D.pages.forEach(function (p) {
+    var id = "p" + p.id, bad = p.error || (p.status && p.status >= 400);
+    var col = bad ? css("--page-bad") : p.dupe ? css("--page-dupe") : p.crawled ? css("--page") : css("--page-seen");
+    info[id] = { t: "page", d: p };
+    nodes.push({
+      id: id, label: short(p.title || tail(p.url), 26), shape: "dot",
+      size: 8 + Math.min(Math.sqrt(deg[id] || 1) * 2.2, 22),
+      color: { background: p.crawled || bad ? col : "transparent", border: col },
+      borderWidth: p.crawled || bad ? 1 : 2, font: { color: css("--fg"), size: 11 }
+    });
+  });
+  D.media.forEach(function (m) {
+    var id = "m" + m.id;
+    var col = m.status === "failed" ? css("--media-bad") : m.status === "duplicate" ? css("--media-dupe")
+            : m.kind === "image" ? css("--image") : m.kind === "video" ? css("--video") : css("--file");
+    info[id] = { t: "media", d: m };
+    nodes.push({
+      id: id, label: short(m.path ? m.path.split("/").pop() : tail(m.url || ""), 22), shape: "square", size: 7,
+      color: { background: col, border: col }, font: { color: css("--fg"), size: 10 }
+    });
+  });
+  var ECOL = [css("--e-link"), css("--e-media"), css("--e-redirect")];
+  D.edges.forEach(function (e, i) {
+    edges.push({
+      id: i, from: "p" + e[0], to: (e[2] === 1 ? "m" : "p") + e[1], _k: e[2],
+      color: { color: ECOL[e[2]], opacity: e[2] === 1 ? 0.55 : 0.8 }, width: e[2] === 1 ? 1 : 1.2,
+      dashes: e[2] === 2, arrows: e[2] === 1 ? "" : "to"
+    });
+  });
+
+  var N = new vis.DataSet(nodes), E = new vis.DataSet(edges);
+  document.getElementById("counts").textContent =
+    D.pages.length + " pages, " + D.media.length + " files, " + D.edges.length + " relationships  •  " + D.db;
+
+  var network = new vis.Network(document.getElementById("net"), { nodes: N, edges: E }, {
+    physics: { solver: "forceAtlas2Based", forceAtlas2Based: { gravitationalConstant: -45, springLength: 90 },
+               stabilization: { iterations: 220 } },
+    interaction: { hover: true, tooltipDelay: 150, hideEdgesOnDrag: nodes.length > 800 },
+    edges: { smooth: false, arrowStrikethrough: false }
+  });
+  var running = true, btn = document.getElementById("physics");
+  function setPhysics(on) { running = on; network.setOptions({ physics: { enabled: on } }); btn.textContent = on ? "Pause layout" : "Resume layout"; }
+  network.once("stabilizationIterationsDone", function () { if (nodes.length > 300) setPhysics(false); });
+  btn.onclick = function () { setPhysics(!running); };
+
+  // ---- filters
+  function $(id) { return document.getElementById(id); }
+  function applyFilters() {
+    var showPages = $("f-pages").checked, showSeen = $("f-seen").checked,
+        showMedia = $("f-media").checked, showMdupe = $("f-mdupe").checked;
+    var upd = [];
+    nodes.forEach(function (n) {
+      var r = info[n.id], hidden;
+      if (r.t === "page") hidden = !showPages || (!r.d.crawled && !r.d.error && !showSeen);
+      else hidden = !showMedia || ((r.d.status === "duplicate" || r.d.status === "failed") && !showMdupe);
+      upd.push({ id: n.id, hidden: hidden });
+    });
+    N.update(upd);
+    E.update(edges.map(function (e) { return { id: e.id, hidden: !$("e-" + e._k).checked }; }));
+  }
+  ["f-pages", "f-seen", "f-media", "f-mdupe", "e-0", "e-1", "e-2"].forEach(function (id) { $(id).onchange = applyFilters; });
+
+  // ---- search
+  $("q").addEventListener("input", function () {
+    var q = this.value.trim().toLowerCase();
+    if (!q) { network.unselectAll(); return; }
+    var hit = nodes.filter(function (n) {
+      var d = info[n.id].d;
+      return [d.url, d.title, d.path].some(function (s) { return s && String(s).toLowerCase().indexOf(q) >= 0; });
+    }).map(function (n) { return n.id; });
+    network.selectNodes(hit);
+    if (hit.length) network.fit({ nodes: hit.slice(0, 50), animation: true });
+    if (hit.length === 1) show(hit[0]);
+  });
+
+  // ---- details (built with DOM calls only: titles and urls come from the web)
+  function el(tag, text, cls) { var e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; }
+  function row(dl, k, v) { if (v == null || v === "") return; dl.appendChild(el("dt", k)); var dd = el("dd"); if (v instanceof Node) dd.appendChild(v); else dd.textContent = v; dl.appendChild(dd); }
+  function link(u) {
+    if (!/^https?:\/\//i.test(u || "")) return el("span", u || "");
+    var a = el("a", u); a.href = u; a.target = "_blank"; a.rel = "noopener noreferrer"; return a;
+  }
+  function neighbours(id) {
+    var out = { links: [], linkedBy: [], media: [], usedOn: [], redirects: [], redirectedFrom: [] };
+    edges.forEach(function (e) {
+      if (e.from === id) (e._k === 0 ? out.links : e._k === 1 ? out.media : out.redirects).push(e.to);
+      if (e.to === id) (e._k === 0 ? out.linkedBy : e._k === 1 ? out.usedOn : out.redirectedFrom).push(e.from);
+    });
+    return out;
+  }
+  function list(box, title, ids) {
+    if (!ids.length) return;
+    box.appendChild(el("div", title + " (" + ids.length + ")", "muted"));
+    var ul = el("ul");
+    ids.slice(0, 40).forEach(function (n) {
+      var d = info[n].d, li = el("li", short(info[n].t === "page" ? (d.title || d.url) : (d.path || d.url), 60));
+      li.onclick = function () { network.selectNodes([n]); network.focus(n, { scale: 1, animation: true }); show(n); };
+      ul.appendChild(li);
+    });
+    if (ids.length > 40) ul.appendChild(el("li", "… and " + (ids.length - 40) + " more", "muted"));
+    box.appendChild(ul);
+  }
+  function show(id) {
+    var box = $("detail"), r = info[id]; box.textContent = "";
+    if (!r) { box.appendChild(el("span", "Click a node to see what it is connected to.", "muted")); return; }
+    var d = r.d, dl = el("dl"), nb = neighbours(id);
+    if (r.t === "page") {
+      box.appendChild(el("h2", d.title || tail(d.url)));
+      row(dl, "type", "page");
+      row(dl, "url", link(d.url));
+      row(dl, "http", d.status);
+      row(dl, "read", d.crawled ? "yes" : "no (only seen as a link)");
+      if (d.dupe) row(dl, "note", "same html as another page");
+      row(dl, "error", d.error); row(dl, "depth", d.depth); row(dl, "html", human(d.size));
+    } else {
+      box.appendChild(el("h2", d.path || tail(d.url || "")));
+      row(dl, "type", d.kind || "file");
+      row(dl, "url", d.url ? link(d.url) : "(was already on disk)");
+      row(dl, "status", d.status); row(dl, "saved as", d.path); row(dl, "mime", d.mime);
+      row(dl, "size", human(d.size)); row(dl, "sha256", d.sha256); row(dl, "error", d.error);
+    }
+    row(dl, "seen", d.at);
+    box.appendChild(dl);
+    list(box, "Used on pages", nb.usedOn);
+    list(box, "Links to pages", nb.links);
+    list(box, "Linked from", nb.linkedBy);
+    list(box, "Has files", nb.media);
+    list(box, "Redirects to", nb.redirects);
+    list(box, "Redirected from", nb.redirectedFrom);
+  }
+  network.on("click", function (p) { show(p.nodes.length ? p.nodes[0] : null); });
+  network.on("doubleClick", function (p) {
+    if (!p.nodes.length) return;
+    var d = info[p.nodes[0]].d;
+    if (/^https?:\/\//i.test(d.url || "")) window.open(d.url, "_blank", "noopener,noreferrer");
+  });
+  applyFilters();
+})();
+</script>
+</body>
+</html>
