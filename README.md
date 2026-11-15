@@ -105,6 +105,6 @@ Views for easy browsing: `v_page_media` (which page has which file), `v_links`, 
 
 **Graph:** `webgrab --db crawl.db --graph crawl.html` (or add `--graph` to a crawl) writes one standalone
 HTML file: pages and files as nodes, links / has-file / redirects as edges, with search, filters and a
-details panel on click. The page loads the vis-network library from a CDN, so it needs internet when opened.
+details panel on click; a checkbox groups each page's files into one "N files" node. The page loads the vis-network library from a CDN, so it needs internet when opened.
 
 Exit code: 0 ok, 1 bad input / fatal, 2 some downloads failed.
