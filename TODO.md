@@ -1,1 +1,2 @@
+- publish first tag/release for windows and linux with github actions
 - maybe? - add element filters from where we get the urls
