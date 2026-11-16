@@ -34,7 +34,7 @@ jobs:
 
           tar -czf "${DIR}-${VERSION}.tar.gz" "$DIR"
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: linux-release
           path: "*.tar.gz"
@@ -73,7 +73,7 @@ jobs:
           Compress-Archive -Path "$dir/*" `
             -DestinationPath "$dir-$version.zip"
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: windows-release
           path: "*.zip"
@@ -84,13 +84,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v7
         with:
           path: release-files
           merge-multiple: true
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: release-files/*
           generate_release_notes: true
