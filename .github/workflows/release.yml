@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: Build Linux
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          DIR="webgrab-linux-x86_64"
+
+          mkdir -p "$DIR"
+
+          cp target/release/webgrab "$DIR/"
+          cp README.md LICENSE "$DIR/" 2>/dev/null || true
+
+          tar -czf "${DIR}-${VERSION}.tar.gz" "$DIR"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: linux-release
+          path: "*.tar.gz"
+
+  windows:
+    name: Build Windows
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = "${env:GITHUB_REF_NAME}"
+          $dir = "webgrab-windows-x86_64"
+
+          New-Item -ItemType Directory -Force -Path $dir
+
+          Copy-Item target/release/webgrab.exe $dir/
+
+          if (Test-Path README.md) {
+            Copy-Item README.md $dir/
+          }
+
+          if (Test-Path LICENSE) {
+            Copy-Item LICENSE $dir/
+          }
+
+          Compress-Archive -Path "$dir/*" `
+            -DestinationPath "$dir-$version.zip"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: windows-release
+          path: "*.zip"
+
+  release:
+    name: Publish GitHub Release
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: release-files
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-files/*
+          generate_release_notes: true
+
