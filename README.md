@@ -35,6 +35,7 @@ webgrab -w [flags]
 | `-n` | `--nodupes` | hash each download; same content already saved -> delete the new file |
 | `-H` | `--hash-existing` | hash files already in `--dir` first |
 | | `--db FILE.db` | SQLite file that remembers pages, files and how they connect; also the resume state (below) |
+| | `--tree FILE.db` | print a tree of what a crawl downloaded, from its db (see below) |
 | | `--graph FILE.html` | write an interactive graph of the `--db` (alone, or after a crawl) |
 | `-s` | `--skip` | skip if a file with the same **name** exists |
 | `-p` | `--replace` | overwrite same-name files (default: `name [1].ext`) |
@@ -111,5 +112,19 @@ Views for easy browsing: `v_page_media` (which page has which file), `v_links`, 
 **Graph:** `webgrab --db crawl.db --graph crawl.html` (or add `--graph` to a crawl) writes one standalone
 HTML file: pages and files as nodes, links / has-file / redirects as edges, with search, filters and a
 details panel on click; a checkbox groups each page's files into one "N files" node. The page loads the vis-network library from a CDN, so it needs internet when opened.
+
+**Tree:** `webgrab --tree crawl.db` prints the downloads as a tree (no download happens):
+```
+◆ https://example.com/posts/  (2 pages, 4 files)
+├─ ▸ /post/1/
+│  ├─ /post/1/img1.jpg
+│  └─ /post/1/img2.jpg
+└─ ▸ /post/2/
+   ├─ /post/2/img1.jpg
+   └─ /post/2/img2.jpg
+```
+Roots are the pages the crawl started from, branches the pages they link to, leaves the files. Each page and
+file is listed once (under the first page that reached it); branches without files are left out; duplicates and
+failed downloads are marked (`≡ duplicate`, `✗ failed`). Piped output has no colors.
 
 Exit code: 0 ok, 1 bad input / fatal, 2 some downloads failed.

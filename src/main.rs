@@ -6,6 +6,7 @@ mod graph;
 mod scan;
 mod skip;
 mod stats;
+mod tree;
 mod ua;
 mod ui;
 mod util;
@@ -41,17 +42,24 @@ fn run(cli: &Cli) -> u8 {
     let ui = Printer::new(cli.colorless, cli.compact);
     let stats = Stats::default();
 
-    // --db crawl.db --graph crawl.html (nothing to download): just draw an earlier crawl
+    // --db crawl.db --graph crawl.html / --tree crawl.db (nothing to download): read an earlier crawl
     if !(cli.watch || cli.read.is_some() || cli.input.is_some()) {
+        if cli.tree.is_none() && cli.graph.is_none() {
+            ui.always(
+                K::Cer,
+                "no input: give a URL, an .html file, --read <file>, --watch or --tree <file.db>",
+            );
+            return 1;
+        }
+        if let Some(db) = &cli.tree {
+            let t = print_tree(&ui, db);
+            if t != 0 {
+                return t;
+            }
+        }
         return match &cli.graph {
             Some(out) => export_graph(cli, &ui, out),
-            None => {
-                ui.always(
-                    K::Cer,
-                    "no input: give a URL, an .html file, --read <file> or --watch",
-                );
-                1
-            }
+            None => 0,
         };
     }
 
@@ -74,6 +82,12 @@ fn run(cli: &Cli) -> u8 {
     };
     drop(ctx); // closes the database (folds its log into the single file)
 
+    if let Some(db) = &cli.tree {
+        let t = print_tree(&ui, db);
+        if t != 0 {
+            return t;
+        }
+    }
     if let Some(out) = &cli.graph {
         let g = export_graph(cli, &ui, out);
         if g != 0 {
@@ -81,6 +95,23 @@ fn run(cli: &Cli) -> u8 {
         }
     }
     code
+}
+
+fn print_tree(ui: &Printer, db: &Path) -> u8 {
+    if !db.is_file() {
+        ui.always(
+            K::Cer,
+            &format!("--tree: database not found: {}", db.display()),
+        );
+        return 1;
+    }
+    match tree::print(db, ui) {
+        Ok(()) => 0,
+        Err(e) => {
+            ui.always(K::Cer, &e);
+            1
+        }
+    }
 }
 
 fn export_graph(cli: &Cli, ui: &Printer, out: &Path) -> u8 {

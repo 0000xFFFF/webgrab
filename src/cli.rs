@@ -26,6 +26,7 @@ EXAMPLES:
   webgrab --db crawl.db --nodupes --unique download_links.html
   webgrab https://example.com -D 2 --media -u -n -t 4 -d pics --db crawl.db --graph crawl.html
   webgrab --db crawl.db --graph crawl.html          (just draw the graph of an earlier crawl)
+  webgrab --tree crawl.db                           (print what an earlier crawl downloaded as a tree)
   webgrab --read urls.txt --media -t 4 -d downloads --db log.db --hash-existing -R
   webgrab \"https://www.youtube.com/watch?v=XXXXXXXXXXX\" --image --unique --must maxres";
 
@@ -58,6 +59,14 @@ pub struct Cli {
     /// Download URLs as they are copied to the clipboard
     #[arg(short = 'w', long, help_heading = "Modes")]
     pub watch: bool,
+
+    /// Print a tree of what a crawl downloaded, read from this --db file (nothing is downloaded)
+    ///
+    /// Roots are the pages the crawl started from, branches the pages they link to, leaves the
+    /// files. Each page and each file is listed once (under the first page that reached it);
+    /// branches without files are left out. Duplicates and failed downloads are marked.
+    #[arg(long, value_name = "FILE.db", help_heading = "Modes")]
+    pub tree: Option<PathBuf>,
 
     // ------------------------------------------------------------- download
     /// How many files to download at the same time
