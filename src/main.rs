@@ -603,7 +603,9 @@ fn handle_page(ctx: &Ctx, st: &mut Crawl, d: usize, url: &str, f: &Fetched) -> V
     ctx.stats.pages.fetch_add(1, Relaxed);
 
     if d < ctx.cli.crawl_depth {
-        follow_pages(ctx, scan.pages, &st.host, &mut st.visited)
+        let next = follow_pages(ctx, scan.pages, &st.host, &mut st.visited);
+        ctx.stats.pages_todo.fetch_add(next.len(), Relaxed);
+        next
     } else {
         Vec::new()
     }
@@ -641,7 +643,12 @@ fn crawl(ctx: &Ctx, start_url: String, start: Fetched) -> u8 {
 
     // depth 0: the page we already have
     crawl_log(ctx, &format!("===[ CRAWL depth 0/{} ]: {}", max, start_key));
-    let mut level = handle_page(ctx, &mut st, 0, &start_key, &start);
+    ctx.stats.pages_todo.fetch_add(1, Relaxed);
+    tick(ctx);
+    let mut level = {
+        let _done = PageDone(ctx);
+        handle_page(ctx, &mut st, 0, &start_key, &start)
+    };
     drop(start);
 
     for d in 1..=max {
@@ -651,6 +658,7 @@ fn crawl(ctx: &Ctx, start_url: String, start: Fetched) -> u8 {
         let mut next: Vec<String> = Vec::new();
         let n = level.len();
         for (i, page) in level.iter().enumerate() {
+            let _done = PageDone(ctx);
             if d == max && ctx.page_seen(page) {
                 stats.skipped.fetch_add(1, Relaxed);
                 if !cli.quiet {
@@ -672,6 +680,7 @@ fn crawl(ctx: &Ctx, start_url: String, start: Fetched) -> u8 {
                     page
                 ),
             );
+            tick(ctx);
             match fetch_page(ctx, page) {
                 Ok(Some(f)) => {
                     let mut key = page.clone();
@@ -903,7 +912,7 @@ fn finish_downloads(ctx: &Ctx, urls: &[String]) -> u8 {
 
 fn download_summary(ctx: &Ctx) -> u8 {
     if ctx.cli.compact {
-        ctx.ui.ticker(&compact_line(ctx.stats));
+        ctx.ui.ticker(&compact_line(ctx.cli, ctx.stats));
         ctx.ui.always(K::Def, "");
     } else {
         print_debug(ctx);
@@ -926,7 +935,7 @@ fn run_downloads(ctx: &Ctx, urls: &[String]) {
         if ctx.cli.compact {
             outer.spawn(|| {
                 while !done.load(Relaxed) {
-                    ctx.ui.ticker(&compact_line(ctx.stats));
+                    ctx.ui.ticker(&compact_line(ctx.cli, ctx.stats));
                     std::thread::sleep(Duration::from_millis(50));
                 }
             });
@@ -948,27 +957,49 @@ fn run_downloads(ctx: &Ctx, urls: &[String]) {
     });
 }
 
-fn compact_line(s: &Stats) -> String {
+/// The --compact counters, one colored part each (zero counters are left out).
+fn compact_line(cli: &Cli, s: &Stats) -> Vec<(K, String)> {
     let g = |a: &AtomicUsize| a.load(Relaxed);
-    let mut parts = Vec::new();
-    let mut add = |label: &str, v: usize| {
+    let mut parts: Vec<(K, String)> = Vec::new();
+    // pages that have to be crawled: finished/found so far (grows while the crawl discovers pages)
+    if cli.crawl_depth > 0 && g(&s.pages_todo) > 0 {
+        let (d, t) = (g(&s.pages_done), g(&s.pages_todo));
+        parts.push((K::Top, format!("crawl: {:>w$}/{}", d, t, w = t.to_string().len())));
+    }
+    let mut add = |k: K, label: &str, v: usize| {
         if v != 0 {
-            parts.push(format!("{}: {}", label, v));
+            parts.push((k, format!("{}: {}", label, v)));
         }
     };
-    add("total", g(&s.total));
-    add("acptd", g(&s.accepted));
-    add("count", g(&s.processed));
-    add("dled", g(&s.dled));
-    add("renamed", g(&s.renamed));
-    add("replc", g(&s.replaced));
-    add("hdupe", g(&s.hash_dupes));
-    add("pages", g(&s.pages));
-    add("pdupe", g(&s.page_dupes));
-    add("skip", g(&s.skipped));
-    add("junk", g(&s.disposed));
-    add("fail", g(&s.failed));
-    parts.join(" ")
+    add(K::Inf, "total", g(&s.total));
+    add(K::Inf, "acptd", g(&s.accepted));
+    add(K::Cur, "count", g(&s.processed));
+    add(K::Pri, "dled", g(&s.dled));
+    add(K::War, "renamed", g(&s.renamed));
+    add(K::War, "replc", g(&s.replaced));
+    add(K::War, "hdupe", g(&s.hash_dupes));
+    add(K::Top, "pages", g(&s.pages));
+    add(K::War, "pdupe", g(&s.page_dupes));
+    add(K::War, "skip", g(&s.skipped));
+    add(K::Def, "junk", g(&s.disposed));
+    add(K::Eri, "fail", g(&s.failed));
+    parts
+}
+
+/// Refresh the --compact counter line (not in --list/--test: stdout carries the link list there).
+fn tick(ctx: &Ctx) {
+    if ctx.cli.compact && !ctx.cli.list && !ctx.cli.test {
+        ctx.ui.ticker(&compact_line(ctx.cli, ctx.stats));
+    }
+}
+
+/// Counts one page of the crawl as finished when it goes out of scope (whatever happened to it).
+struct PageDone<'a>(&'a Ctx<'a>);
+impl Drop for PageDone<'_> {
+    fn drop(&mut self) {
+        self.0.stats.pages_done.fetch_add(1, Relaxed);
+        tick(self.0);
+    }
 }
 
 fn print_debug(ctx: &Ctx) {

@@ -18,6 +18,7 @@ pub enum K {
 pub struct Printer {
     color_out: bool,
     color_err: bool,
+    tty_out: bool,
     compact: bool,
     lock: Mutex<()>,
 }
@@ -35,6 +36,7 @@ impl Printer {
         Self {
             color_out: !off && std::io::stdout().is_terminal(),
             color_err: !off && std::io::stderr().is_terminal(),
+            tty_out: std::io::stdout().is_terminal(),
             compact,
             lock: Mutex::new(()),
         }
@@ -86,11 +88,26 @@ impl Printer {
         let _ = writeln!(std::io::stdout().lock(), "{}", text);
     }
 
-    /// Rewrite the current line (compact counters).
-    pub fn ticker(&self, text: &str) {
+    /// Rewrite the current line (compact counters). Every part is colored by its kind
+    /// (unless colors are off), parts are separated by a space.
+    pub fn ticker(&self, parts: &[(K, String)]) {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut line = String::new();
+        for (i, (k, text)) in parts.iter().enumerate() {
+            if i > 0 {
+                line.push(' ');
+            }
+            if self.color_out {
+                line.push_str(Self::code(*k));
+                line.push_str(text);
+                line.push_str("\x1b[0m");
+            } else {
+                line.push_str(text);
+            }
+        }
         let mut out = std::io::stdout().lock();
-        let _ = write!(out, "\r{}", text);
+        // "\x1b[K" erases what is left of a longer previous line (terminals only)
+        let _ = write!(out, "\r{}{}", line, if self.tty_out { "\x1b[K" } else { "" });
         let _ = out.flush();
     }
 }
