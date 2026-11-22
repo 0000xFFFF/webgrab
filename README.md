@@ -81,7 +81,6 @@ webgrab https://example.com --image --agent-firefox --compact
 - Files that already exist are renamed (`name [1].ext`); `--skip` skips same names, `--replace` overwrites.
 - HTTP 429 (too many requests) while crawling is handled automatically: retries and slows down.
 - Colors are on in a terminal; `--colorless` turns them off.
-- Exit code: 0 ok, 1 bad input, 2 some downloads failed.
 
 ## More
 - [DOCS.md](DOCS.md): every flag, how crawling and rate limits work, resuming, the database tables, graph, tree.
