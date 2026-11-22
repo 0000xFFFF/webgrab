@@ -14,7 +14,7 @@ mod util;
 use clap::Parser;
 use cli::Cli;
 use db::PageRec;
-use download::{Ctx, sha256_hex};
+use download::{Ctx, rand_below, sha256_hex};
 use filter::Hint;
 use stats::Stats;
 use std::collections::{HashMap, HashSet};
@@ -378,16 +378,6 @@ fn follow_pages(
     out
 }
 
-/// Random number in 0..max (std only: every RandomState has its own random keys).
-fn rand_below(max: u64) -> u64 {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    if max == 0 {
-        return 0;
-    }
-    RandomState::new().build_hasher().finish() % max
-}
-
 /// The pause before the next page request: the larger of --crawl-sleep (the minimum) and the
 /// sleep calibrated from earlier 429s, plus up to 10% random so it isn't a fixed rhythm.
 fn page_pause(ctx: &Ctx) -> u64 {
@@ -404,15 +394,7 @@ fn page_pause(ctx: &Ctx) -> u64 {
 fn learn_from_429(ctx: &Ctx, url: &str, used: u64, took: Duration) {
     let (old, new) = {
         let mut p = ctx.pace.lock().unwrap_or_else(|e| e.into_inner());
-        let old = p.learned_ms;
-        let took_ms = took.as_millis() as u64;
-        let new = (old + old / 2)
-            .max(used.saturating_mul(2))
-            .max(took_ms.saturating_mul(2))
-            .max(500)
-            .min(60_000);
-        p.learned_ms = new;
-        p.hits += 1;
+        let (old, new, _) = p.raise(Instant::now() - took, used, took);
         (old, new)
     };
     if !ctx.cli.quiet {

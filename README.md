@@ -79,7 +79,7 @@ webgrab https://example.com --image --agent-firefox --compact
 - Flags work with one or two dashes and hyphens or underscores: `--crawl-depth` = `-crawl-depth` = `--crawl_depth`.
 - Short flags (`-t 4`, `-d out`, `-D 2`) take their value after a space and can't be combined.
 - Files that already exist are renamed (`name [1].ext`); `--skip` skips same names, `--replace` overwrites.
-- HTTP 429 (too many requests) while crawling is handled automatically: retries and slows down.
+- HTTP 429 (too many requests) is handled automatically, for crawled pages and for file downloads: it retries and learns a pause so it doesn't happen again. `--sleep MS` / `--crawl-sleep MS` set a minimum pause, `--no-retry-429` turns it off.
 - Colors are on in a terminal; `--colorless` turns them off.
 
 ## More

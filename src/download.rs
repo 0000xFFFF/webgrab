@@ -13,7 +13,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::Ordering::Relaxed;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub enum Outcome {
     Downloaded,
@@ -48,18 +48,58 @@ pub struct Ctx<'a> {
     db: Option<Db>,
     /// crawl pacing learned from HTTP 429 answers (see `Pace`)
     pub pace: Mutex<Pace>,
+    /// the same for file downloads (--sleep, --no-retry-429)
+    dl_pace: Mutex<Pace>,
 }
 
-/// Crawl pacing. Starts at 0; every HTTP 429 raises `learned_ms` so the next requests are
-/// spaced far enough apart not to be rate limited again.
+/// Request pacing. Starts at 0; every HTTP 429 raises `learned_ms` so the next requests are
+/// spaced far enough apart not to be rate limited again. One for page requests (the crawl) and
+/// one for file downloads.
 #[derive(Default)]
 pub struct Pace {
-    /// calibrated pause between two page requests (ms), 0 until the first 429
+    /// calibrated pause between two requests (ms), 0 until the first 429
     pub learned_ms: u64,
     /// the pause actually used before the most recent request (ms)
     pub last_pause_ms: u64,
     /// how many HTTP 429 answers were received so far
     pub hits: u32,
+    /// downloads only: the earliest moment the next request may start (all threads share it)
+    next_at: Option<Instant>,
+    /// when `learned_ms` was last raised
+    raised_at: Option<Instant>,
+}
+
+impl Pace {
+    /// A 429 arrived for a request that got its place in line at `sent`; `used` = the pause that request had
+    /// waited, `took` = how long it took to be answered. Raises the calibrated pause to the
+    /// largest of 1.5x the old one, 2x `used`, 2x `took` and 500 ms (max 60 s).
+    /// Returns (old, new, raised): `raised` is false when another request that went out under the
+    /// same pace was already answered with a 429 (many threads, one lesson).
+    pub fn raise(&mut self, sent: Instant, used: u64, took: Duration) -> (u64, u64, bool) {
+        let old = self.learned_ms;
+        self.hits += 1;
+        if self.raised_at.map_or(false, |t| sent < t) {
+            return (old, old, false);
+        }
+        let new = (old + old / 2)
+            .max(used.saturating_mul(2))
+            .max((took.as_millis() as u64).saturating_mul(2))
+            .max(500)
+            .min(60_000);
+        self.learned_ms = new;
+        self.raised_at = Some(Instant::now());
+        (old, new, true)
+    }
+}
+
+/// Random number in 0..max (std only: every RandomState has its own random keys).
+pub fn rand_below(max: u64) -> u64 {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    if max == 0 {
+        return 0;
+    }
+    RandomState::new().build_hasher().finish() % max
 }
 
 fn hex_of_file(path: &Path) -> io::Result<String> {
@@ -160,6 +200,7 @@ impl<'a> Ctx<'a> {
             hashes: Mutex::new(hashes),
             db,
             pace: Mutex::new(Pace::default()),
+            dl_pace: Mutex::new(Pace::default()),
         };
 
         if cli.hash_existing && downloading {
@@ -393,6 +434,93 @@ impl<'a> Ctx<'a> {
     }
 
     /// Download one URL. Safe to call from many threads.
+    /// Wait for this download's turn: request starts are spaced max(--sleep, learned pause) +
+    /// up to 10% random apart, for all threads together. Returns the gap that was used (ms).
+    /// Also returns the moment the slot was assigned (what a later 429 is judged against).
+    fn download_gap(&self) -> (u64, Instant) {
+        let assigned = Instant::now();
+        let (wait, gap) = {
+            let mut p = self.dl_pace.lock().unwrap_or_else(|e| e.into_inner());
+            let base = self.cli.sleep.max(p.learned_ms);
+            let gap = base + rand_below(base / 10 + 1);
+            p.last_pause_ms = gap;
+            let now = Instant::now();
+            let start = p.next_at.filter(|t| *t > now).unwrap_or(now);
+            p.next_at = Some(start + Duration::from_millis(gap));
+            (start.saturating_duration_since(now), gap)
+        };
+        if !wait.is_zero() {
+            std::thread::sleep(wait);
+        }
+        (gap, assigned)
+    }
+
+    /// GET a file. Request starts are paced (see `download_gap`); HTTP 429 is retried with
+    /// exponential backoff (1s, 2s, 4s ... max 60s, or the server's Retry-After if longer) plus a
+    /// random offset, and every 429 teaches a longer pause to all the downloads after it.
+    /// Err = (http status, message).
+    fn get_file(&self, url: &str) -> Result<ureq::Response, (Option<u16>, String)> {
+        let cli = self.cli;
+        let mut attempt: u32 = 0;
+        let mut backoff_ms: u64 = 0;
+        loop {
+            // back off first, then take a place in line, so the slot is used right when it comes up
+            if backoff_ms > 0 {
+                std::thread::sleep(Duration::from_millis(backoff_ms));
+            }
+            let (gap, assigned) = self.download_gap();
+            let sent = Instant::now();
+            match self.get(url).call() {
+                Ok(r) => return Ok(r),
+                Err(ureq::Error::Status(429, resp)) => {
+                    let (old, new, raised) = {
+                        let mut p = self.dl_pace.lock().unwrap_or_else(|e| e.into_inner());
+                        p.raise(assigned, gap, sent.elapsed())
+                    };
+                    if raised {
+                        self.note(
+                            K::War,
+                            &format!(
+                                "WAR[429] {} - failed request took {} ms after a {:.1}s gap; download sleep calibrated {:.1}s -> {:.1}s",
+                                url,
+                                sent.elapsed().as_millis(),
+                                gap as f64 / 1000.0,
+                                old as f64 / 1000.0,
+                                new as f64 / 1000.0
+                            ),
+                        );
+                    }
+                    if cli.no_retry_429 || attempt >= cli.retries {
+                        return Err((Some(429), "HTTP 429".into()));
+                    }
+                    let backoff = (1000u64 << attempt.min(6)).min(60_000);
+                    let asked = resp
+                        .header("retry-after")
+                        .and_then(|v| v.trim().parse::<u64>().ok())
+                        .map(|s| s.saturating_mul(1000).min(120_000))
+                        .unwrap_or(0);
+                    // never wait less than the calibrated pause
+                    let learned = self.dl_pace.lock().unwrap_or_else(|e| e.into_inner()).learned_ms;
+                    let base = backoff.max(asked).max(learned);
+                    backoff_ms = base + rand_below(base / 5 + 250); // + up to 20% and 250 ms
+                    attempt += 1;
+                    self.note(
+                        K::War,
+                        &format!(
+                            "WAR[429] {} - retry {}/{} in {:.1}s",
+                            url,
+                            attempt,
+                            cli.retries,
+                            backoff_ms as f64 / 1000.0
+                        ),
+                    );
+                }
+                Err(ureq::Error::Status(code, _)) => return Err((Some(code), format!("HTTP {}", code))),
+                Err(e) => return Err((None, e.to_string())),
+            }
+        }
+    }
+
     pub fn download(&self, url: &str) -> Result<Outcome, String> {
         let n = self.stats.processed.fetch_add(1, Relaxed) + 1;
         let cli = self.cli;
@@ -423,12 +551,9 @@ impl<'a> Ctx<'a> {
             return Ok(Outcome::Skipped);
         }
 
-        let resp = match self.get(url).call() {
+        let resp = match self.get_file(url) {
             Ok(r) => r,
-            Err(ureq::Error::Status(code, _)) => {
-                return self.fail(url, None, Some(code), &format!("HTTP {}", code));
-            }
-            Err(e) => return self.fail(url, None, None, &e.to_string()),
+            Err((status, msg)) => return self.fail(url, None, status, &msg),
         };
         let http = resp.status();
         let mime: Option<String> = resp

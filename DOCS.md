@@ -24,6 +24,9 @@ webgrab -w [flags]
 | `-d DIR` | `--dir DIR` | download folder |
 | `-R` | `--recursive` | `--skip` and `--hash-existing` also look in subfolders |
 | `-D N` | `--crawl-depth N` | crawl depth (default 0 = only the given page, see below) |
+| | `--sleep MS` | minimum gap between the starts of two file downloads (all threads together); the learned 429 pause is used instead when larger |
+| | `--no-retry-429` | don't retry or learn on HTTP 429 for file downloads (both are on by default) |
+| | `--retries N` | max retries per file after HTTP 429 (default 6) |
 | | `--crawl-sleep MS` | minimum pause before every page request; the learned 429 pause is used instead when larger |
 | | `--crawl-no-retry-429` | don't retry or learn on HTTP 429 (both are on by default) |
 | | `--crawl-retries N` | max retries per page after HTTP 429 (default 6) |
@@ -79,8 +82,12 @@ before it, and raises a calibrated pause to the largest of 1.5x the old one, 2x 
 and 500 ms (max 60 s). Every later page request waits `max(--crawl-sleep, calibrated pause)` + up to 10% random, so
 after one 429 the crawl slows down instead of running into the limit again (raised again if it still happens).
 `--crawl-sleep MS` is therefore the *minimum* pause; the calibrated pause is used when larger and is not saved
-between runs. `--crawl-no-retry-429` switches retrying and learning off. These apply to page requests only; file
-downloads are not throttled.
+between runs. `--crawl-no-retry-429` switches retrying and learning off. These apply to page requests only.
+
+**File downloads** work the same way with their own pause: `--sleep MS` (minimum), `--no-retry-429`, `--retries N`.
+The difference is that downloads run in `--threads` threads: the *starts* of download requests are spaced
+`max(--sleep, calibrated pause)` + up to 10% apart for all threads together, and when several threads get a 429 at
+the same moment the pause is raised only once. The page pause and the download pause are learned separately.
 Resuming a crawl: with `--db` every crawled page is recorded once its files are done. On a re-run,
 pages at the last depth that are already in the db are skipped; recorded pages *above* it are read again
 only to find the pages below them (their files are skipped), otherwise an interrupted crawl could never

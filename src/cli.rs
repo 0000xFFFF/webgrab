@@ -222,6 +222,30 @@ pub struct Cli {
     #[arg(long, default_value_t = 6, value_name = "NUM", help_heading = "Crawl")]
     pub crawl_retries: u32,
 
+    /// Minimum pause in milliseconds between the starts of two file downloads (avoids HTTP 429).
+    ///
+    /// Works across all --threads: download requests are started at least this far apart (not per thread). The downloads also learn a pause of their own from HTTP 429 answers (see --no-retry-429): the gap between two starts is whichever is LARGER, this value or the learned pause, plus up to 10% random. Default 0 = no fixed minimum, only the learned pause (which starts at 0). Page requests of --crawl-depth have their own pause, see --crawl-sleep.
+    #[arg(long, default_value_t = 0, value_name = "MS", help_heading = "Download")]
+    pub sleep: u64,
+
+    /// Don't retry or learn when a file download answers HTTP 429 (Too Many Requests).
+    ///
+    /// By default a 429 is handled in two ways.
+    ///
+    /// 1. RETRY: the download is retried with exponential backoff (1s, 2s, 4s ... max 60s). The server's `Retry-After` header is respected if it asks for a longer wait, the wait is never shorter than the learned pause (see 2.), and a random offset (up to 20% + 250 ms) is added.
+    ///
+    /// 2. LEARN: the downloader measures how long the failed request took and which gap between starts it had used, then raises its calibrated pause to the largest of: 1.5x the old calibrated pause, 2x the gap that failed, 2x the time the failed request took, 500 ms (max 60s). All threads then start their downloads at least that far apart, so after being 429-ed once it slows down instead of hitting the limit again. If several threads get a 429 at the same moment the pause is raised only once. If the server still answers 429 it is raised again.
+    ///
+    /// The gap between download starts is max(--sleep, calibrated pause) + up to 10% random. The calibrated pause is not saved between runs.
+    ///
+    /// With this flag a 429 is not retried and nothing is learned: the download counts as failed (recorded in --db and retried on the next run).
+    #[arg(long, help_heading = "Download")]
+    pub no_retry_429: bool,
+
+    /// How many times to retry one download that keeps answering HTTP 429 before giving up
+    #[arg(long, default_value_t = 6, value_name = "NUM", help_heading = "Download")]
+    pub retries: u32,
+
     /// Also follow links to other hosts (default: stay on the start page's host)
     #[arg(long, help_heading = "Crawl")]
     pub external: bool,
