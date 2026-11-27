@@ -1,3 +1,1 @@
-- add learning 429 throttle retry to file downloads as well
-    - so add --no-retry-429, --sleep <MS> , etc
 - maybe? - add element filters from where we get the urls
